@@ -60,14 +60,31 @@ static int (*const async_init_fn[ASYNC_INIT_STEP_COUNT])(const struct device *de
 
 static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value, uint8_t len) {
 	const struct pixart_config *cfg = dev->config;
-	const struct spi_buf tx_buf = { .buf = &addr, .len = sizeof(addr) };
-	const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1 };
-	struct spi_buf rx_buf[] = {
-		{ .buf = NULL, .len = sizeof(addr), },
-		{ .buf = value, .len = len, },
-	};
-	const struct spi_buf_set rx = { .buffers = rx_buf, .count = ARRAY_SIZE(rx_buf) };
-	return spi_transceive_dt(&cfg->spi, &tx, &rx);
+	uint8_t dummy;
+	int err;
+
+	// Send address byte as a single-byte transaction. CS deassertion
+	// between transactions gives the AVR slave time to prepare its
+	// response (avoids the single-buffered SPDR overwrite race).
+	const struct spi_buf addr_tx_buf = { .buf = &addr, .len = 1 };
+	const struct spi_buf_set addr_tx = { .buffers = &addr_tx_buf, .count = 1 };
+	struct spi_buf addr_rx_buf = { .buf = &dummy, .len = 1 };
+	const struct spi_buf_set addr_rx = { .buffers = &addr_rx_buf, .count = 1 };
+	err = spi_transceive_dt(&cfg->spi, &addr_tx, &addr_rx);
+	if (err) return err;
+
+	// Read each data byte as an individual transaction.
+	uint8_t read_tx = 0x00;
+	for (uint8_t i = 0; i < len; i++) {
+		const struct spi_buf data_tx_buf = { .buf = &read_tx, .len = 1 };
+		const struct spi_buf_set data_tx = { .buffers = &data_tx_buf, .count = 1 };
+		struct spi_buf data_rx_buf = { .buf = &value[i], .len = 1 };
+		const struct spi_buf_set data_rx = { .buffers = &data_rx_buf, .count = 1 };
+		err = spi_transceive_dt(&cfg->spi, &data_tx, &data_rx);
+		if (err) return err;
+	}
+
+	return 0;
 }
 
 static int pmw3610_read_reg(const struct device *dev, uint8_t addr, uint8_t *value) {
