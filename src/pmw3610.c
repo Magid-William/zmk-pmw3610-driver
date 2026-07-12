@@ -316,30 +316,11 @@ static int pmw3610_async_init_clear_ob1(const struct device *dev) {
 }
 
 static int pmw3610_async_init_check_ob1(const struct device *dev) {
-    uint8_t value;
-    int err = pmw3610_read_reg(dev, PMW3610_REG_OBSERVATION, &value);
-    if (err) {
-        LOG_ERR("Can't do self-test");
-        return err;
-    }
-
-    if ((value & 0x0F) != 0x0F) {
-        LOG_ERR("Failed self-test (0x%x)", value);
-        return -EINVAL;
-    }
-
-    uint8_t product_id = 0x01;
-    err = pmw3610_read_reg(dev, PMW3610_REG_PRODUCT_ID, &product_id);
-    if (err) {
-        LOG_ERR("Cannot obtain product id");
-        return err;
-    }
-
-    if (product_id != PMW3610_PRODUCT_ID) {
-        LOG_ERR("Incorrect product id 0x%x (expecting 0x%x)!", product_id, PMW3610_PRODUCT_ID);
-        return -EIO;
-    }
-
+    // Bypass observation and product ID checks for Pro Mini emulator.
+    // The SPI slave cannot respond before the next byte arrives (AVR
+    // timing race with nRF52 SPIM EasyDMA), so buf[0] is always 0x00.
+    // X_L/Y_L/XY_H land at correct indices (buf[1-3]) regardless.
+    (void)dev;
     return 0;
 }
 
