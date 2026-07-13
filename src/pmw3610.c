@@ -487,6 +487,21 @@ static int pmw3610_report_data(const struct device *dev) {
     bool have_x = rx != 0;
     bool have_y = ry != 0;
 
+    // Slow zone: first ~3 burst units after idle get scaled down
+    // (user maps ~4 burst units to ~10px on screen with current CPI)
+    if (have_x || have_y) {
+        if (data->slow_budget > 0) {
+            int16_t mag = abs(rx) + abs(ry);
+            rx /= 2;
+            ry /= 2;
+            data->slow_budget -= mag;
+            have_x = rx != 0;
+            have_y = ry != 0;
+        }
+    } else {
+        data->slow_budget = CONFIG_PMW3610_ALT_SLOW_ZONE;
+    }
+
     if (have_x || have_y) {
 #if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
         data->last_rpt_time = now;
@@ -569,6 +584,9 @@ static int pmw3610_init(const struct device *dev) {
 
     // init smart algorithm flag;
     data->sw_smart_flag = false;
+
+    // init slow zone budget (Exp08)
+    data->slow_budget = CONFIG_PMW3610_ALT_SLOW_ZONE;
 
     // init trigger handler work
     k_work_init(&data->trigger_work, pmw3610_work_callback);

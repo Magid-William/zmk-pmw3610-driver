@@ -43,6 +43,15 @@ config PMW3610_ALT_REPORT_INTERVAL_MIN
 		Slow down input reporting for hid queue over the air.
 		Turn value down to 8ms to get sharp response if use with USB only.
 
+config PMW3610_ALT_SLOW_ZONE
+	int "Slow zone movement budget (burst units)"
+	default 3
+	range 0 100
+	help
+	  First N burst units after idle get halved in reported value.
+	  Provides a "starts slow" feel at the ZMK level.
+	  0 disables the slow zone.
+
 config PMW3610_ALT_SMART_ALGORITHM
   bool "Enable an algorithm of PMW3610 to enhance surface coverage"
   default y

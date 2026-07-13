@@ -25,6 +25,7 @@ struct pixart_data {
     int64_t                      last_rpt_time;
 #endif
     bool                         sw_smart_flag; // for pmw3610 smart algorithm
+    int16_t                      slow_budget;   // remaining slow-zone movement budget (Exp08)
 
     struct gpio_callback         irq_gpio_cb; // motion pin irq callback
     struct k_work                trigger_work; // realtrigger job
