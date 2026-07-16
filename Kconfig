@@ -96,7 +96,6 @@ config PMW3610_ALT_REST3_SAMPLE_TIME_MS
 
 config PMW3610_ALT_LAYER_TOGGLE
   bool "Enable automatic layer toggle on trackpoint motion"
-  depends on ZMK_KEYMAP
   default n
   help
     When enabled, the PMW3610 driver activates a specified layer whenever
