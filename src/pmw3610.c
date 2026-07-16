@@ -454,7 +454,7 @@ static int pmw3610_report_data(const struct device *dev) {
         if (!data->layer_toggle_layer_enabled) {
             LOG_INF("Activating layer %d on motion (x=%d y=%d)",
                     config->layer_toggle, x, y);
-            zmk_keymap_layer_activate(config->layer_toggle);
+            zmk_keymap_layer_activate(config->layer_toggle, false);
             data->layer_toggle_layer_enabled = true;
         }
         k_work_reschedule(&data->layer_toggle_deactivation_work,
