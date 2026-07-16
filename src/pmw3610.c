@@ -526,13 +526,9 @@ static void pmw3610_layer_toggle_deactivate(struct k_work *item) {
     const struct device *dev = data->dev;
     const struct pixart_config *config = dev->config;
 
-    int64_t elapsed = k_uptime_get() - data->layer_toggle_last_motion_time;
-    if (elapsed > config->layer_toggle_timeout_ms / 10) {
-        return;
-    }
-
     LOG_INF("Deactivating layer %d (no motion for %lldms)",
-            config->layer_toggle, elapsed);
+            config->layer_toggle,
+            k_uptime_get() - data->layer_toggle_last_motion_time);
 
     if (zmk_keymap_layer_active(config->layer_toggle)) {
         zmk_keymap_layer_deactivate(config->layer_toggle, false);
