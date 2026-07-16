@@ -535,7 +535,7 @@ static void pmw3610_layer_toggle_deactivate(struct k_work *item) {
             config->layer_toggle, elapsed);
 
     if (zmk_keymap_layer_active(config->layer_toggle)) {
-        zmk_keymap_layer_deactivate(config->layer_toggle);
+        zmk_keymap_layer_deactivate(config->layer_toggle, false);
     }
     data->layer_toggle_layer_enabled = false;
 }
