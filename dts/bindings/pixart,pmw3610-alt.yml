@@ -32,3 +32,11 @@ properties:
     type: boolean
   force-awake-4ms-mode:
     type: boolean
+  layer-toggle:
+    type: int
+    default: -1
+    description: "Layer to activate on motion (-1 = disabled)"
+  layer-toggle-timeout-ms:
+    type: int
+    default: 2000
+    description: "Timeout in ms after last motion before deactivating the layer"

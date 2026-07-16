@@ -448,6 +448,20 @@ static int pmw3610_report_data(const struct device *dev) {
     int16_t y = TOINT16((buf[PMW3610_Y_L_POS] + ((buf[PMW3610_XY_H_POS] & 0x0F) << 8)), 12);
     LOG_DBG("x/y: %d/%d", x, y);
 
+#if CONFIG_PMW3610_ALT_LAYER_TOGGLE
+    if (config->layer_toggle >= 0 && (x != 0 || y != 0)) {
+        data->layer_toggle_last_motion_time = k_uptime_get();
+        if (!data->layer_toggle_layer_enabled) {
+            LOG_INF("Activating layer %d on motion (x=%d y=%d)",
+                    config->layer_toggle, x, y);
+            zmk_keymap_layer_activate(config->layer_toggle);
+            data->layer_toggle_layer_enabled = true;
+        }
+        k_work_reschedule(&data->layer_toggle_deactivation_work,
+                          K_MSEC(config->layer_toggle_timeout_ms));
+    }
+#endif
+
 #ifdef CONFIG_PMW3610_ALT_SMART_ALGORITHM
     int16_t shutter = ((int16_t)(buf[PMW3610_SHUTTER_H_POS] & 0x01) << 8) 
                     + buf[PMW3610_SHUTTER_L_POS];
@@ -503,6 +517,29 @@ static int pmw3610_report_data(const struct device *dev) {
 
     return err;
 }
+
+#if CONFIG_PMW3610_ALT_LAYER_TOGGLE
+static void pmw3610_layer_toggle_deactivate(struct k_work *item) {
+    struct k_work_delayable *d_work = k_work_delayable_from_work(item);
+    struct pixart_data *data =
+        CONTAINER_OF(d_work, struct pixart_data, layer_toggle_deactivation_work);
+    const struct device *dev = data->dev;
+    const struct pixart_config *config = dev->config;
+
+    int64_t elapsed = k_uptime_get() - data->layer_toggle_last_motion_time;
+    if (elapsed > config->layer_toggle_timeout_ms / 10) {
+        return;
+    }
+
+    LOG_INF("Deactivating layer %d (no motion for %lldms)",
+            config->layer_toggle, elapsed);
+
+    if (zmk_keymap_layer_active(config->layer_toggle)) {
+        zmk_keymap_layer_deactivate(config->layer_toggle);
+    }
+    data->layer_toggle_layer_enabled = false;
+}
+#endif
 
 static void pmw3610_gpio_callback(const struct device *gpiob, struct gpio_callback *cb,
                                   uint32_t pins) {
@@ -569,6 +606,13 @@ static int pmw3610_init(const struct device *dev) {
 
     // init smart algorithm flag;
     data->sw_smart_flag = false;
+
+#if CONFIG_PMW3610_ALT_LAYER_TOGGLE
+    data->layer_toggle_layer_enabled = false;
+    data->layer_toggle_last_motion_time = 0;
+    k_work_init_delayable(&data->layer_toggle_deactivation_work,
+                          pmw3610_layer_toggle_deactivate);
+#endif
 
     // init trigger handler work
     k_work_init(&data->trigger_work, pmw3610_work_callback);
@@ -679,6 +723,8 @@ static const struct sensor_driver_api pmw3610_driver_api = {
         .y_input_code = DT_PROP(DT_DRV_INST(n), y_input_code),                                     \
         .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                                       \
         .force_awake_4ms_mode = DT_PROP(DT_DRV_INST(n), force_awake_4ms_mode),                     \
+        .layer_toggle = DT_PROP(DT_DRV_INST(n), layer_toggle),                                     \
+        .layer_toggle_timeout_ms = DT_PROP(DT_DRV_INST(n), layer_toggle_timeout_ms),               \
     };                                                                                             \
     DEVICE_DT_INST_DEFINE(n, pmw3610_init, NULL, &data##n, &config##n, POST_KERNEL,                \
                           CONFIG_INPUT_PMW3610_INIT_PRIORITY, &pmw3610_driver_api);
