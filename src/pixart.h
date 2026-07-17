@@ -40,6 +40,14 @@ struct pixart_data {
 
     bool                         ready; // whether init is finished successfully
     int                          err; // error code during async init
+
+    // acceleration state — smooths &mmv-like ±1 events over BLE
+    struct k_work_delayable      accel_work;
+    int64_t                      accel_start_ms;
+    int16_t                      accel_target_x;
+    int16_t                      accel_target_y;
+    uint8_t                      accel_magnitude;
+    bool                         accel_active;
 };
 
 // device config data structure

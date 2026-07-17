@@ -420,6 +420,40 @@ static void pmw3610_async_init(struct k_work *work) {
     }
 }
 
+static void pmw3610_accel_work_callback(struct k_work *work) {
+    struct k_work_delayable *d_work = k_work_delayable_from_work(work);
+    struct pixart_data *data = CONTAINER_OF(d_work, struct pixart_data, accel_work);
+    const struct device *dev = data->dev;
+    const struct pixart_config *config = dev->config;
+
+    if (!data->accel_active) return;
+    if (data->accel_target_x == 0 && data->accel_target_y == 0) {
+        data->accel_active = false;
+        return;
+    }
+
+    bool have_x = data->accel_target_x != 0;
+    bool have_y = data->accel_target_y != 0;
+    if (have_x) {
+        input_report(dev, config->evt_type, config->x_input_code,
+                     data->accel_target_x, !have_y, K_NO_WAIT);
+    }
+    if (have_y) {
+        input_report(dev, config->evt_type, config->y_input_code,
+                     data->accel_target_y, true, K_NO_WAIT);
+    }
+
+    int64_t elapsed = k_uptime_get() - data->accel_start_ms;
+    uint32_t base_time = 300;
+    uint32_t accel_time = base_time / max(1, data->accel_magnitude);
+
+    float progress = (elapsed >= accel_time) ? 1.0f : (float)elapsed / accel_time;
+    uint32_t interval = 50 - (uint32_t)(45.0f * progress);
+    if (interval < 5) interval = 5;
+
+    k_work_schedule(d_work, K_MSEC(interval));
+}
+
 static int pmw3610_report_data(const struct device *dev) {
     struct pixart_data *data = dev->data;
     const struct pixart_config *config = dev->config;
@@ -429,10 +463,6 @@ static int pmw3610_report_data(const struct device *dev) {
         LOG_WRN("Device is not initialized yet");
         return -EBUSY;
     }
-
-#if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
-    int64_t now = k_uptime_get();
-#endif
 
 	int err = pmw3610_read(dev, PMW3610_REG_MOTION_BURST, buf, PMW3610_BURST_SIZE);
     if (err) {
@@ -475,44 +505,19 @@ static int pmw3610_report_data(const struct device *dev) {
     }
 #endif
 
-#if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
-    // purge accumulated delta, if last sampled had not been reported on last report tick
-    if (now - data->last_smp_time >= CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN) {
-        data->dx = 0;
-        data->dy = 0;
-    }
-    data->last_smp_time = now;
-#endif
-
-    // accumulate delta until report in next iteration
-    data->dx += x;
-    data->dy += y;
-
-#if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
-    // strict to report inerval
-    if (now - data->last_rpt_time < CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN) {
-        return 0;
-    }
-#endif
-
-    // fetch report value
-    int16_t rx = (int16_t)CLAMP(data->dx, INT16_MIN, INT16_MAX);
-    int16_t ry = (int16_t)CLAMP(data->dy, INT16_MIN, INT16_MAX);
-    bool have_x = rx != 0;
-    bool have_y = ry != 0;
-
-    if (have_x || have_y) {
-#if CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN > 0
-        data->last_rpt_time = now;
-#endif
-        data->dx = 0;
-        data->dy = 0;
-        if (have_x) {
-            input_report(dev, config->evt_type, config->x_input_code, rx, !have_y, K_NO_WAIT);
+    uint8_t mag = abs(x) + abs(y);
+    if (mag > 0) {
+        data->accel_target_x = (x > 0) ? 1 : (x < 0) ? -1 : 0;
+        data->accel_target_y = (y > 0) ? 1 : (y < 0) ? -1 : 0;
+        data->accel_magnitude = mag;
+        data->accel_start_ms = k_uptime_get();
+        if (!data->accel_active) {
+            data->accel_active = true;
+            k_work_schedule(&data->accel_work, K_NO_WAIT);
         }
-        if (have_y) {
-            input_report(dev, config->evt_type, config->y_input_code, ry, true, K_NO_WAIT);
-        }
+    } else if (!data->accel_active) {
+        data->accel_target_x = 0;
+        data->accel_target_y = 0;
     }
 
     return err;
@@ -609,6 +614,12 @@ static int pmw3610_init(const struct device *dev) {
     k_work_init_delayable(&data->layer_toggle_deactivation_work,
                           pmw3610_layer_toggle_deactivate);
 #endif
+
+    k_work_init_delayable(&data->accel_work, pmw3610_accel_work_callback);
+    data->accel_active = false;
+    data->accel_target_x = 0;
+    data->accel_target_y = 0;
+    data->accel_magnitude = 0;
 
     // init trigger handler work
     k_work_init(&data->trigger_work, pmw3610_work_callback);
