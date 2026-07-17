@@ -8,6 +8,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/sys/byteorder.h>
+#include <zephyr/sys/util.h>
 #include <zephyr/input/input.h>
 #include <zephyr/pm/device.h>
 #include <zmk/keymap.h>
