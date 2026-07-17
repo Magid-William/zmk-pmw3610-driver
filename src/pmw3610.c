@@ -510,8 +510,10 @@ static int pmw3610_report_data(const struct device *dev) {
     if (mag > 0) {
         data->accel_target_x = (x > 0) ? 1 : (x < 0) ? -1 : 0;
         data->accel_target_y = (y > 0) ? 1 : (y < 0) ? -1 : 0;
-        data->accel_magnitude = mag;
-        data->accel_start_ms = k_uptime_get();
+        if (!data->accel_active || data->accel_magnitude != mag) {
+            data->accel_magnitude = mag;
+            data->accel_start_ms = k_uptime_get();
+        }
         if (!data->accel_active) {
             data->accel_active = true;
             k_work_schedule(&data->accel_work, K_NO_WAIT);
