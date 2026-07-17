@@ -446,7 +446,7 @@ static void pmw3610_accel_work_callback(struct k_work *work) {
 
     int64_t elapsed = k_uptime_get() - data->accel_start_ms;
     uint32_t base_time = 300;
-    uint32_t accel_time = base_time / max(1, data->accel_magnitude);
+    uint32_t accel_time = base_time / MAX(1, data->accel_magnitude);
 
     float progress = (elapsed >= accel_time) ? 1.0f : (float)elapsed / accel_time;
     uint32_t interval = 50 - (uint32_t)(45.0f * progress);
