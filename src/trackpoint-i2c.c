@@ -92,6 +92,6 @@ static int trackpoint_i2c_init(const struct device *dev) {
         .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                \
     };                                                                                  \
     DEVICE_DT_INST_DEFINE(n, trackpoint_i2c_init, NULL, &data##n, &config##n,           \
-                          POST_KERNEL, INPUT_INIT_PRIORITY, NULL);
+                          POST_KERNEL, CONFIG_INPUT_INIT_PRIORITY, NULL);
 
 DT_INST_FOREACH_STATUS_OKAY(TRACKPOINT_I2C_DEFINE)
