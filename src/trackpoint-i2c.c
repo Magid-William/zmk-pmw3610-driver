@@ -10,10 +10,8 @@
 
 LOG_MODULE_REGISTER(trackpoint_i2c, CONFIG_TRACKPOINT_I2C_LOG_LEVEL);
 
-#define BURST_SIZE    7
+#define BURST_SIZE    2
 #define BURST_ADDR    0x12
-
-#define TOINT16(val, bits) (((struct { int16_t value : bits; }){val}).value)
 
 #define INPUT_EV_REL    0x02
 #define INPUT_REL_X     0x00
@@ -42,8 +40,8 @@ static void trackpoint_i2c_poll(struct k_work *work) {
 
     int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, buf, BURST_SIZE);
     if (ret == 0) {
-        int16_t x = TOINT16((buf[1] + ((buf[3] & 0xF0) << 4)), 12);
-        int16_t y = TOINT16((buf[2] + ((buf[3] & 0x0F) << 8)), 12);
+        int8_t x = (int8_t)buf[0];
+        int8_t y = (int8_t)buf[1];
 
         data->dx += x;
         data->dy += y;
@@ -102,7 +100,7 @@ static int trackpoint_i2c_init(const struct device *dev) {
     k_work_init_delayable(&data->poll_work, trackpoint_i2c_poll);
     k_work_schedule(&data->poll_work, K_MSEC(100));
 
-    LOG_INF("trackpoint-i2c Exp18 initialized (poll 10ms)");
+    LOG_INF("trackpoint-i2c Exp18 raw int8 initialized");
     return 0;
 }
 
