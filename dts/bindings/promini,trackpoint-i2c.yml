@@ -1,0 +1,10 @@
+description: I2C trackpoint slave (Pro Mini emulator)
+
+compatible: "promini,trackpoint-i2c"
+
+include: i2c-device.yaml
+
+properties:
+  irq-gpios:
+    type: phandle-array
+    required: true
