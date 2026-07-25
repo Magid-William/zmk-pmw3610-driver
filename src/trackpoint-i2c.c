@@ -17,6 +17,10 @@ LOG_MODULE_REGISTER(trackpoint_i2c, CONFIG_TRACKPOINT_I2C_LOG_LEVEL);
 #define INPUT_REL_X     0x00
 #define INPUT_REL_Y     0x01
 
+#define SWAP_XY   1
+#define INVERT_X  1
+#define INVERT_Y  1
+
 struct trackpoint_i2c_config {
     struct i2c_dt_spec i2c;
     struct gpio_dt_spec irq_gpio;
@@ -40,8 +44,13 @@ static void trackpoint_i2c_poll(struct k_work *work) {
 
     int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, buf, BURST_SIZE);
     if (ret == 0) {
-        int8_t x = (int8_t)buf[0];
-        int8_t y = -(int8_t)buf[1];
+        int8_t rawx = (int8_t)buf[0];
+        int8_t rawy = (int8_t)buf[1];
+#if SWAP_XY
+        int8_t t = rawx; rawx = rawy; rawy = t;
+#endif
+        int8_t x = INVERT_X ? -rawx : rawx;
+        int8_t y = INVERT_Y ? -rawy : rawy;
 
         data->dx += x;
         data->dy += y;
