@@ -2,6 +2,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
+#include <zephyr/sys/printk.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/logging/log.h>
@@ -28,9 +29,9 @@ static void trackpoint_i2c_work_callback(struct k_work *work) {
 
     int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, &val, 1);
     if (ret == 0) {
-        LOG_INF("I2C reg[0x00] = 0x%02x", val);
+        printk("MOT: reg[0x00]=0x%02x\n", val);
     } else {
-        LOG_ERR("I2C read failed: %d", ret);
+        printk("MOT: I2C fail %d\n", ret);
     }
 }
 
@@ -79,6 +80,15 @@ static int trackpoint_i2c_init(const struct device *dev) {
     if (ret) {
         LOG_ERR("Cannot enable IRQ interrupt: %d", ret);
         return ret;
+    }
+
+    uint8_t tst_addr = 0x00;
+    uint8_t tst_val = 0;
+    int tst_ret = i2c_write_read_dt(&cfg->i2c, &tst_addr, 1, &tst_val, 1);
+    if (tst_ret == 0) {
+        printk("I2C INIT OK: reg[0x00]=0x%02x\n", tst_val);
+    } else {
+        printk("I2C INIT FAIL: %d\n", tst_ret);
     }
 
     LOG_INF("trackpoint-i2c initialized");
