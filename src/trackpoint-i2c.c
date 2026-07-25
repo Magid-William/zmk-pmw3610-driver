@@ -17,11 +17,12 @@ struct trackpoint_i2c_config {
 struct trackpoint_i2c_data {
     const struct device *dev;
     struct gpio_callback irq_gpio_cb;
-    struct k_work trigger_work;
+    struct k_work_delayable poll_work;
 };
 
-static void trackpoint_i2c_work_callback(struct k_work *work) {
-    struct trackpoint_i2c_data *data = CONTAINER_OF(work, struct trackpoint_i2c_data, trigger_work);
+static void trackpoint_i2c_poll(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct trackpoint_i2c_data *data = CONTAINER_OF(dwork, struct trackpoint_i2c_data, poll_work);
     const struct trackpoint_i2c_config *cfg = data->dev->config;
 
     uint8_t addr = 0x00;
@@ -29,19 +30,17 @@ static void trackpoint_i2c_work_callback(struct k_work *work) {
 
     int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, &val, 1);
     if (ret == 0) {
-        printk("MOT: reg[0x00]=0x%02x\n", val);
+        printk("POLL: reg[0x00]=0x%02x\n", val);
     } else {
-        printk("MOT: I2C fail %d\n", ret);
+        printk("POLL: I2C fail %d\n", ret);
     }
+
+    k_work_schedule(&data->poll_work, K_MSEC(100));
 }
 
 static void trackpoint_i2c_gpio_callback(const struct device *gpiob,
                                           struct gpio_callback *cb, uint32_t pins) {
-    struct trackpoint_i2c_data *data = CONTAINER_OF(cb, struct trackpoint_i2c_data, irq_gpio_cb);
-    const struct trackpoint_i2c_config *cfg = data->dev->config;
-
-    gpio_pin_interrupt_configure_dt(&cfg->irq_gpio, GPIO_INT_DISABLE);
-    k_work_submit(&data->trigger_work);
+    (void)gpiob; (void)cb; (void)pins;
 }
 
 static int trackpoint_i2c_init(const struct device *dev) {
@@ -66,21 +65,8 @@ static int trackpoint_i2c_init(const struct device *dev) {
         return ret;
     }
 
-    gpio_init_callback(&data->irq_gpio_cb, trackpoint_i2c_gpio_callback,
-                       BIT(cfg->irq_gpio.pin));
-    ret = gpio_add_callback(cfg->irq_gpio.port, &data->irq_gpio_cb);
-    if (ret) {
-        LOG_ERR("Cannot add IRQ callback: %d", ret);
-        return ret;
-    }
-
-    k_work_init(&data->trigger_work, trackpoint_i2c_work_callback);
-
-    ret = gpio_pin_interrupt_configure_dt(&cfg->irq_gpio, GPIO_INT_LEVEL_ACTIVE);
-    if (ret) {
-        LOG_ERR("Cannot enable IRQ interrupt: %d", ret);
-        return ret;
-    }
+    k_work_init_delayable(&data->poll_work, trackpoint_i2c_poll);
+    k_work_schedule(&data->poll_work, K_MSEC(500));
 
     uint8_t tst_addr = 0x00;
     uint8_t tst_val = 0;
