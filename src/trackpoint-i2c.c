@@ -5,9 +5,19 @@
 #include <zephyr/sys/printk.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/input/input.h>
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(trackpoint_i2c, CONFIG_TRACKPOINT_I2C_LOG_LEVEL);
+
+#define BURST_SIZE    7
+#define BURST_ADDR    0x12
+
+#define TOINT16(val, bits) (((struct { int16_t value : bits; }){val}).value)
+
+#define INPUT_EV_REL    0x02
+#define INPUT_REL_X     0x00
+#define INPUT_REL_Y     0x01
 
 struct trackpoint_i2c_config {
     struct i2c_dt_spec i2c;
@@ -18,6 +28,8 @@ struct trackpoint_i2c_data {
     const struct device *dev;
     struct gpio_callback irq_gpio_cb;
     struct k_work_delayable poll_work;
+    int64_t dx;
+    int64_t dy;
 };
 
 static void trackpoint_i2c_poll(struct k_work *work) {
@@ -25,17 +37,28 @@ static void trackpoint_i2c_poll(struct k_work *work) {
     struct trackpoint_i2c_data *data = CONTAINER_OF(dwork, struct trackpoint_i2c_data, poll_work);
     const struct trackpoint_i2c_config *cfg = data->dev->config;
 
-    uint8_t addr = 0x00;
-    uint8_t val = 0;
+    uint8_t addr = BURST_ADDR;
+    uint8_t buf[BURST_SIZE];
 
-    int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, &val, 1);
+    int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, buf, BURST_SIZE);
     if (ret == 0) {
-        printk("POLL: reg[0x00]=0x%02x\n", val);
+        int16_t x = TOINT16((buf[1] + ((buf[3] & 0xF0) << 4)), 12);
+        int16_t y = TOINT16((buf[2] + ((buf[3] & 0x0F) << 8)), 12);
+
+        data->dx += x;
+        data->dy += y;
+
+        if (data->dx != 0 || data->dy != 0) {
+            input_report(data->dev, INPUT_EV_REL, INPUT_REL_X, data->dx, false, K_NO_WAIT);
+            input_report(data->dev, INPUT_EV_REL, INPUT_REL_Y, data->dy, true, K_NO_WAIT);
+            data->dx = 0;
+            data->dy = 0;
+        }
     } else {
-        printk("POLL: I2C fail %d\n", ret);
+        LOG_WRN("I2C read failed: %d", ret);
     }
 
-    k_work_schedule(&data->poll_work, K_MSEC(100));
+    k_work_schedule(&data->poll_work, K_MSEC(10));
 }
 
 static void trackpoint_i2c_gpio_callback(const struct device *gpiob,
@@ -48,6 +71,8 @@ static int trackpoint_i2c_init(const struct device *dev) {
     const struct trackpoint_i2c_config *cfg = dev->config;
 
     data->dev = dev;
+    data->dx = 0;
+    data->dy = 0;
 
     if (!device_is_ready(cfg->i2c.bus)) {
         LOG_ERR("I2C bus not ready");
@@ -65,19 +90,19 @@ static int trackpoint_i2c_init(const struct device *dev) {
         return ret;
     }
 
-    k_work_init_delayable(&data->poll_work, trackpoint_i2c_poll);
-    k_work_schedule(&data->poll_work, K_MSEC(500));
-
     uint8_t tst_addr = 0x00;
     uint8_t tst_val = 0;
     int tst_ret = i2c_write_read_dt(&cfg->i2c, &tst_addr, 1, &tst_val, 1);
     if (tst_ret == 0) {
-        printk("I2C INIT OK: reg[0x00]=0x%02x\n", tst_val);
+        printk("I2C INIT OK: PID=0x%02x\n", tst_val);
     } else {
         printk("I2C INIT FAIL: %d\n", tst_ret);
     }
 
-    LOG_INF("trackpoint-i2c initialized");
+    k_work_init_delayable(&data->poll_work, trackpoint_i2c_poll);
+    k_work_schedule(&data->poll_work, K_MSEC(100));
+
+    LOG_INF("trackpoint-i2c Exp18 initialized (poll 10ms)");
     return 0;
 }
 
