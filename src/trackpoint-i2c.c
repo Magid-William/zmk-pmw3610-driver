@@ -49,6 +49,8 @@ static void trackpoint_i2c_poll(struct k_work *work) {
         data->dy += y;
 
         if (data->dx != 0 || data->dy != 0) {
+            printk("burst=%02x %02x %02x %02x %02x x=%d y=%d\n",
+                   buf[0], buf[1], buf[2], buf[3], buf[4], x, y);
             input_report(data->dev, INPUT_EV_REL, INPUT_REL_X, data->dx, false, K_NO_WAIT);
             input_report(data->dev, INPUT_EV_REL, INPUT_REL_Y, data->dy, true, K_NO_WAIT);
             data->dx = 0;
