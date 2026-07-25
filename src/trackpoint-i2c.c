@@ -28,7 +28,6 @@ struct trackpoint_i2c_data {
     struct k_work_delayable poll_work;
     int64_t dx;
     int64_t dy;
-    uint16_t dbg_cnt;
 };
 
 static void trackpoint_i2c_poll(struct k_work *work) {
@@ -41,12 +40,8 @@ static void trackpoint_i2c_poll(struct k_work *work) {
 
     int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, buf, BURST_SIZE);
     if (ret == 0) {
-        data->dbg_cnt++;
-        if ((data->dbg_cnt % 50) == 0) {
-            printk("b %02x %02x\n", buf[0], buf[1]);
-        }
         int8_t x = (int8_t)buf[0];
-        int8_t y = (int8_t)buf[1];
+        int8_t y = -(int8_t)buf[1];
 
         data->dx += x;
         data->dy += y;
@@ -76,7 +71,6 @@ static int trackpoint_i2c_init(const struct device *dev) {
     data->dev = dev;
     data->dx = 0;
     data->dy = 0;
-    data->dbg_cnt = 0;
 
     if (!device_is_ready(cfg->i2c.bus)) {
         LOG_ERR("I2C bus not ready");
