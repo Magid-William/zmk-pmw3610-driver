@@ -17,7 +17,7 @@ LOG_MODULE_REGISTER(trackpoint_i2c, CONFIG_TRACKPOINT_I2C_LOG_LEVEL);
 #define INPUT_REL_X     0x00
 #define INPUT_REL_Y     0x01
 
-#define SWAP_XY   0
+#define SWAP_XY   1
 #define INVERT_X  1
 #define INVERT_Y  0
 
