@@ -8,3 +8,9 @@ properties:
   irq-gpios:
     type: phandle-array
     required: true
+  layer-toggle:
+    type: int
+    default: -1
+  layer-toggle-timeout-ms:
+    type: int
+    default: 2000
