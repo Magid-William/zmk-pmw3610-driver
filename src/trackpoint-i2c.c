@@ -24,6 +24,7 @@ LOG_MODULE_REGISTER(trackpoint_i2c, CONFIG_TRACKPOINT_I2C_LOG_LEVEL);
 struct trackpoint_i2c_config {
     struct i2c_dt_spec i2c;
     struct gpio_dt_spec irq_gpio;
+    struct gpio_dt_spec reset_gpio;
 };
 
 struct trackpoint_i2c_data {
@@ -108,6 +109,16 @@ static int trackpoint_i2c_init(const struct device *dev) {
         return ret;
     }
 
+    if (!device_is_ready(cfg->reset_gpio.port)) {
+        LOG_ERR("Reset GPIO device not ready");
+        return -ENODEV;
+    }
+
+    gpio_pin_configure_dt(&cfg->reset_gpio, GPIO_OUTPUT_ACTIVE);
+    k_msleep(100);
+    gpio_pin_configure_dt(&cfg->reset_gpio, GPIO_INPUT | GPIO_PULL_UP);
+    k_msleep(500);
+
     uint8_t tst_addr = 0x00;
     uint8_t tst_val = 0;
     int tst_ret = i2c_write_read_dt(&cfg->i2c, &tst_addr, 1, &tst_val, 1);
@@ -129,6 +140,7 @@ static int trackpoint_i2c_init(const struct device *dev) {
     static const struct trackpoint_i2c_config config##n = {                             \
         .i2c = I2C_DT_SPEC_INST_GET(n),                                                 \
         .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                \
+        .reset_gpio = GPIO_DT_SPEC_INST_GET(n, reset_gpios),                            \
     };                                                                                  \
     DEVICE_DT_INST_DEFINE(n, trackpoint_i2c_init, NULL, &data##n, &config##n,           \
                           POST_KERNEL, CONFIG_INPUT_INIT_PRIORITY, NULL);
