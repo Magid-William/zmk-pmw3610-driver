@@ -19,7 +19,7 @@ LOG_MODULE_REGISTER(trackpoint_i2c, CONFIG_TRACKPOINT_I2C_LOG_LEVEL);
 
 #define SWAP_XY   1
 #define INVERT_X  1
-#define INVERT_Y  0
+#define INVERT_Y  1
 
 struct trackpoint_i2c_config {
     struct i2c_dt_spec i2c;
