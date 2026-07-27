@@ -7,7 +7,6 @@ include: i2c-device.yaml
 properties:
   irq-gpios:
     type: phandle-array
-    required: true
   reset-gpios:
     type: phandle-array
     required: true

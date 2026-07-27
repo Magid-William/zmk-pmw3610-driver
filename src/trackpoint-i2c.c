@@ -98,15 +98,16 @@ static int trackpoint_i2c_init(const struct device *dev) {
         return -ENODEV;
     }
 
-    if (!device_is_ready(cfg->irq_gpio.port)) {
-        LOG_ERR("IRQ GPIO device not ready");
-        return -ENODEV;
-    }
-
-    int ret = gpio_pin_configure_dt(&cfg->irq_gpio, GPIO_INPUT);
-    if (ret) {
-        LOG_ERR("Cannot configure IRQ GPIO: %d", ret);
-        return ret;
+    if (cfg->irq_gpio.port) {
+        if (!device_is_ready(cfg->irq_gpio.port)) {
+            LOG_ERR("IRQ GPIO device not ready");
+            return -ENODEV;
+        }
+        int ret = gpio_pin_configure_dt(&cfg->irq_gpio, GPIO_INPUT);
+        if (ret) {
+            LOG_ERR("Cannot configure IRQ GPIO: %d", ret);
+            return ret;
+        }
     }
 
     if (!device_is_ready(cfg->reset_gpio.port)) {
@@ -139,7 +140,7 @@ static int trackpoint_i2c_init(const struct device *dev) {
     static struct trackpoint_i2c_data data##n;                                          \
     static const struct trackpoint_i2c_config config##n = {                             \
         .i2c = I2C_DT_SPEC_INST_GET(n),                                                 \
-        .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                \
+        .irq_gpio = GPIO_DT_SPEC_INST_GET_OR(n, irq_gpios, {0}),                        \
         .reset_gpio = GPIO_DT_SPEC_INST_GET(n, reset_gpios),                            \
     };                                                                                  \
     DEVICE_DT_INST_DEFINE(n, trackpoint_i2c_init, NULL, &data##n, &config##n,           \
