@@ -44,7 +44,10 @@ static void trackpoint_i2c_poll(struct k_work *work) {
     uint8_t addr = BURST_ADDR;
     uint8_t buf[BURST_SIZE];
 
-    int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, buf, BURST_SIZE);
+    int ret = i2c_write_dt(&cfg->i2c, &addr, 1);
+    if (ret == 0) {
+        ret = i2c_read_dt(&cfg->i2c, buf, BURST_SIZE);
+    }
     if (ret == 0) {
         int8_t rawx = (int8_t)buf[0];
         int8_t rawy = (int8_t)buf[1];
@@ -122,7 +125,10 @@ static int trackpoint_i2c_init(const struct device *dev) {
 
     uint8_t tst_addr = 0x00;
     uint8_t tst_val = 0;
-    int tst_ret = i2c_write_read_dt(&cfg->i2c, &tst_addr, 1, &tst_val, 1);
+    int tst_ret = i2c_write_dt(&cfg->i2c, &tst_addr, 1);
+    if (tst_ret == 0) {
+        tst_ret = i2c_read_dt(&cfg->i2c, &tst_val, 1);
+    }
     if (tst_ret == 0) {
         printk("I2C INIT OK: PID=0x%02x\n", tst_val);
     } else {
