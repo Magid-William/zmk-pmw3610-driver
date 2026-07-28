@@ -38,7 +38,7 @@ struct trackpoint_i2c_data {
     int64_t dy;
     uint8_t zero_count;
     uint32_t prev_poll_ms;
-#if CONFIG_TRACKPOINT_I2C_LAYER_TOGGLE
+#if CONFIG_TRACKPOINT_I2C_LAYER_TOGGLE && (!defined(CONFIG_ZMK_SPLIT) || CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
     bool layer_toggle_layer_enabled;
     int64_t layer_toggle_last_motion_time;
     struct k_work_delayable layer_toggle_deactivation_work;
@@ -104,7 +104,7 @@ static void trackpoint_i2c_poll(struct k_work *work) {
             data->dx = 0;
             data->dy = 0;
 
-#if CONFIG_TRACKPOINT_I2C_LAYER_TOGGLE
+#if CONFIG_TRACKPOINT_I2C_LAYER_TOGGLE && (!defined(CONFIG_ZMK_SPLIT) || CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
             if (cfg->layer_toggle >= 0 && (x != 0 || y != 0)) {
                 data->layer_toggle_last_motion_time = k_uptime_get();
                 if (!data->layer_toggle_layer_enabled) {
@@ -127,7 +127,7 @@ static void trackpoint_i2c_poll(struct k_work *work) {
     k_work_schedule(&data->poll_work, K_MSEC(10));
 }
 
-#if CONFIG_TRACKPOINT_I2C_LAYER_TOGGLE
+#if CONFIG_TRACKPOINT_I2C_LAYER_TOGGLE && (!defined(CONFIG_ZMK_SPLIT) || CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 static void trackpoint_i2c_layer_toggle_deactivate(struct k_work *item) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(item);
     struct trackpoint_i2c_data *data =
@@ -160,7 +160,7 @@ static int trackpoint_i2c_init(const struct device *dev) {
     data->zero_count = 0;
     data->prev_poll_ms = 0;
 
-#if CONFIG_TRACKPOINT_I2C_LAYER_TOGGLE
+#if CONFIG_TRACKPOINT_I2C_LAYER_TOGGLE && (!defined(CONFIG_ZMK_SPLIT) || CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
     data->layer_toggle_layer_enabled = false;
     data->layer_toggle_last_motion_time = 0;
     k_work_init_delayable(&data->layer_toggle_deactivation_work,
