@@ -7,7 +7,6 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/input/input.h>
 #include <zephyr/logging/log.h>
-#include <zmk/keymap.h>
 
 LOG_MODULE_REGISTER(trackpoint_i2c, CONFIG_TRACKPOINT_I2C_LOG_LEVEL);
 
@@ -26,8 +25,6 @@ struct trackpoint_i2c_config {
     struct i2c_dt_spec i2c;
     struct gpio_dt_spec irq_gpio;
     struct gpio_dt_spec reset_gpio;
-    int8_t layer_toggle;
-    int32_t layer_toggle_timeout_ms;
 };
 
 struct trackpoint_i2c_data {
@@ -38,11 +35,6 @@ struct trackpoint_i2c_data {
     int64_t dy;
     uint8_t zero_count;
     uint32_t prev_poll_ms;
-#if CONFIG_TRACKPOINT_I2C_LAYER_TOGGLE
-    bool layer_toggle_layer_enabled;
-    int64_t layer_toggle_last_motion_time;
-    struct k_work_delayable layer_toggle_deactivation_work;
-#endif
 };
 
 static void trackpoint_i2c_poll(struct k_work *work) {
@@ -103,20 +95,6 @@ static void trackpoint_i2c_poll(struct k_work *work) {
             input_report(data->dev, INPUT_EV_REL, INPUT_REL_Y, data->dy, true, K_NO_WAIT);
             data->dx = 0;
             data->dy = 0;
-
-#if CONFIG_TRACKPOINT_I2C_LAYER_TOGGLE
-            if (cfg->layer_toggle >= 0 && (x != 0 || y != 0)) {
-                data->layer_toggle_last_motion_time = k_uptime_get();
-                if (!data->layer_toggle_layer_enabled) {
-                    LOG_INF("Activating layer %d on motion (x=%d y=%d)",
-                            cfg->layer_toggle, x, y);
-                    zmk_keymap_layer_activate(cfg->layer_toggle, false);
-                    data->layer_toggle_layer_enabled = true;
-                }
-                k_work_reschedule(&data->layer_toggle_deactivation_work,
-                                  K_MSEC(cfg->layer_toggle_timeout_ms));
-            }
-#endif
         } else {
             LOG_DBG("no motion to report");
         }
@@ -126,24 +104,6 @@ static void trackpoint_i2c_poll(struct k_work *work) {
 
     k_work_schedule(&data->poll_work, K_MSEC(10));
 }
-
-#if CONFIG_TRACKPOINT_I2C_LAYER_TOGGLE
-static void trackpoint_i2c_layer_toggle_deactivate(struct k_work *item) {
-    struct k_work_delayable *dwork = k_work_delayable_from_work(item);
-    struct trackpoint_i2c_data *data =
-        CONTAINER_OF(dwork, struct trackpoint_i2c_data, layer_toggle_deactivation_work);
-    const struct trackpoint_i2c_config *cfg = data->dev->config;
-
-    LOG_INF("Deactivating layer %d (no motion for %lldms)",
-            cfg->layer_toggle,
-            k_uptime_get() - data->layer_toggle_last_motion_time);
-
-    if (zmk_keymap_layer_active(cfg->layer_toggle)) {
-        zmk_keymap_layer_deactivate(cfg->layer_toggle, false);
-    }
-    data->layer_toggle_layer_enabled = false;
-}
-#endif
 
 static void trackpoint_i2c_gpio_callback(const struct device *gpiob,
                                           struct gpio_callback *cb, uint32_t pins) {
@@ -159,13 +119,6 @@ static int trackpoint_i2c_init(const struct device *dev) {
     data->dy = 0;
     data->zero_count = 0;
     data->prev_poll_ms = 0;
-
-#if CONFIG_TRACKPOINT_I2C_LAYER_TOGGLE
-    data->layer_toggle_layer_enabled = false;
-    data->layer_toggle_last_motion_time = 0;
-    k_work_init_delayable(&data->layer_toggle_deactivation_work,
-                          trackpoint_i2c_layer_toggle_deactivate);
-#endif
 
     LOG_INF("init start");
 
@@ -224,8 +177,6 @@ static int trackpoint_i2c_init(const struct device *dev) {
         .i2c = I2C_DT_SPEC_INST_GET(n),                                                 \
         .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                \
         .reset_gpio = GPIO_DT_SPEC_INST_GET(n, reset_gpios),                            \
-        .layer_toggle = DT_INST_PROP(n, layer_toggle),                                  \
-        .layer_toggle_timeout_ms = DT_INST_PROP(n, layer_toggle_timeout_ms),            \
     };                                                                                  \
     DEVICE_DT_INST_DEFINE(n, trackpoint_i2c_init, NULL, &data##n, &config##n,           \
                           POST_KERNEL, CONFIG_INPUT_INIT_PRIORITY, NULL);

@@ -120,16 +120,6 @@ menuconfig TRACKPOINT_I2C
 
 if TRACKPOINT_I2C
 
-config TRACKPOINT_I2C_LAYER_TOGGLE
-  bool "Enable automatic layer toggle on trackpoint motion"
-  default n
-  help
-    When enabled, the trackpoint I2C driver activates a specified layer whenever
-    trackpoint motion is detected, and deactivates it after a configurable
-    timeout (default 2000ms) of inactivity.
-    Configure which layer and timeout via devicetree properties
-    'layer-toggle' and 'layer-toggle-timeout-ms'.
-
 module = TRACKPOINT_I2C
 module-str = TRACKPOINT_I2C
 source "${ZEPHYR_BASE}/subsys/logging/Kconfig.template.log_config"
