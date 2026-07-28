@@ -46,6 +46,7 @@ static void trackpoint_i2c_poll(struct k_work *work) {
 
     int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, buf, BURST_SIZE);
     if (ret == 0) {
+        printk("POLL: rawx=%d rawy=%d\n", (int8_t)buf[0], (int8_t)buf[1]);
         int8_t rawx = (int8_t)buf[0];
         int8_t rawy = (int8_t)buf[1];
 #if SWAP_XY
@@ -67,13 +68,14 @@ static void trackpoint_i2c_poll(struct k_work *work) {
         data->dy += y;
 
         if (data->dx != 0 || data->dy != 0) {
+            printk("REPORT: dx=%d dy=%d\n", (int)data->dx, (int)data->dy);
             input_report(data->dev, INPUT_EV_REL, INPUT_REL_X, data->dx, false, K_NO_WAIT);
             input_report(data->dev, INPUT_EV_REL, INPUT_REL_Y, data->dy, true, K_NO_WAIT);
             data->dx = 0;
             data->dy = 0;
         }
     } else {
-        LOG_WRN("I2C read failed: %d", ret);
+        printk("POLL FAIL: %d\n", ret);
     }
 
     k_work_schedule(&data->poll_work, K_MSEC(10));
@@ -131,7 +133,7 @@ static int trackpoint_i2c_init(const struct device *dev) {
     k_work_init_delayable(&data->poll_work, trackpoint_i2c_poll);
     k_work_schedule(&data->poll_work, K_MSEC(100));
 
-    LOG_INF("trackpoint-i2c Exp18 raw int8 initialized");
+    printk("trackpoint-i2c INIT OK\n");
     return 0;
 }
 
