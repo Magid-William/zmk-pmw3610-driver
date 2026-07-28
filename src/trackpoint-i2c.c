@@ -24,6 +24,7 @@ struct trackpoint_i2c_config {
     bool swap_xy;
     bool invert_x;
     bool invert_y;
+    uint32_t divider;
 };
 
 struct trackpoint_i2c_data {
@@ -84,16 +85,30 @@ static void trackpoint_i2c_poll(struct k_work *work) {
         LOG_DBG("accumulator: dx=%d dy=%d zero_count=%u", (int)data->dx, (int)data->dy, data->zero_count);
 
         if (data->dx != 0 || data->dy != 0) {
+            int16_t rx, ry;
+            if (cfg->divider > 1) {
+                rx = data->dx / (int16_t)cfg->divider;
+                ry = data->dy / (int16_t)cfg->divider;
+                data->dx -= rx * (int16_t)cfg->divider;
+                data->dy -= ry * (int16_t)cfg->divider;
+            } else {
+                rx = data->dx;
+                ry = data->dy;
+                data->dx = 0;
+                data->dy = 0;
+            }
             LOG_INF("SEND: dev=%s ev=REL type=REL_%s val=%d",
                     data->dev->name,
-                    "X", (int)data->dx);
-            input_report(data->dev, INPUT_EV_REL, INPUT_REL_X, data->dx, false, K_NO_WAIT);
+                    "X", (int)rx);
+            if (rx != 0) {
+                input_report(data->dev, INPUT_EV_REL, INPUT_REL_X, rx, false, K_NO_WAIT);
+            }
             LOG_INF("SEND: dev=%s ev=REL type=REL_%s val=%d sync",
                     data->dev->name,
-                    "Y", (int)data->dy);
-            input_report(data->dev, INPUT_EV_REL, INPUT_REL_Y, data->dy, true, K_NO_WAIT);
-            data->dx = 0;
-            data->dy = 0;
+                    "Y", (int)ry);
+            if (ry != 0) {
+                input_report(data->dev, INPUT_EV_REL, INPUT_REL_Y, ry, true, K_NO_WAIT);
+            }
         } else {
             LOG_DBG("no motion to report");
         }
@@ -179,6 +194,7 @@ static int trackpoint_i2c_init(const struct device *dev) {
         .swap_xy = DT_INST_PROP(n, swap_xy),                                            \
         .invert_x = DT_INST_PROP(n, invert_x),                                          \
         .invert_y = DT_INST_PROP(n, invert_y),                                          \
+        .divider = DT_INST_PROP(n, divider),                                            \
     };                                                                                  \
     DEVICE_DT_INST_DEFINE(n, trackpoint_i2c_init, NULL, &data##n, &config##n,           \
                           POST_KERNEL, CONFIG_INPUT_INIT_PRIORITY, NULL);

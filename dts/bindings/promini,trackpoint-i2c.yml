@@ -17,3 +17,7 @@ properties:
     type: boolean
   invert-y:
     type: boolean
+  divider:
+    type: uint32
+    default: 1
+    description: Divide reported X/Y values by this factor (1 = no change, 2 = half speed, etc.)
