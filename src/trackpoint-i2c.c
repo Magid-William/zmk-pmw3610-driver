@@ -17,14 +17,13 @@ LOG_MODULE_REGISTER(trackpoint_i2c, CONFIG_TRACKPOINT_I2C_LOG_LEVEL);
 #define INPUT_REL_X     0x00
 #define INPUT_REL_Y     0x01
 
-#define SWAP_XY   1
-#define INVERT_X  1
-#define INVERT_Y  1
-
 struct trackpoint_i2c_config {
     struct i2c_dt_spec i2c;
     struct gpio_dt_spec irq_gpio;
     struct gpio_dt_spec reset_gpio;
+    bool swap_xy;
+    bool invert_x;
+    bool invert_y;
 };
 
 struct trackpoint_i2c_data {
@@ -60,12 +59,12 @@ static void trackpoint_i2c_poll(struct k_work *work) {
 
         LOG_INF("raw sign-extended: x=%d y=%d", (int)rawx, (int)rawy);
 
-#if SWAP_XY
-        int8_t t = rawx; rawx = rawy; rawy = t;
-        LOG_DBG("after SWAP_XY: x=%d y=%d", (int)rawx, (int)rawy);
-#endif
-        int8_t x = INVERT_X ? -rawx : rawx;
-        int8_t y = INVERT_Y ? -rawy : rawy;
+        if (cfg->swap_xy) {
+            int8_t t = rawx; rawx = rawy; rawy = t;
+            LOG_DBG("after SWAP_XY: x=%d y=%d", (int)rawx, (int)rawy);
+        }
+        int8_t x = cfg->invert_x ? -rawx : rawx;
+        int8_t y = cfg->invert_y ? -rawy : rawy;
         LOG_DBG("after INVERT: x=%d y=%d", (int)x, (int)y);
 
         if (rawx == 0 && rawy == 0) {
@@ -177,6 +176,9 @@ static int trackpoint_i2c_init(const struct device *dev) {
         .i2c = I2C_DT_SPEC_INST_GET(n),                                                 \
         .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                \
         .reset_gpio = GPIO_DT_SPEC_INST_GET(n, reset_gpios),                            \
+        .swap_xy = DT_INST_PROP(n, swap_xy),                                            \
+        .invert_x = DT_INST_PROP(n, invert_x),                                          \
+        .invert_y = DT_INST_PROP(n, invert_y),                                          \
     };                                                                                  \
     DEVICE_DT_INST_DEFINE(n, trackpoint_i2c_init, NULL, &data##n, &config##n,           \
                           POST_KERNEL, CONFIG_INPUT_INIT_PRIORITY, NULL);

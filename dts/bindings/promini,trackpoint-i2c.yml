@@ -11,3 +11,9 @@ properties:
   reset-gpios:
     type: phandle-array
     required: true
+  swap-xy:
+    type: boolean
+  invert-x:
+    type: boolean
+  invert-y:
+    type: boolean
