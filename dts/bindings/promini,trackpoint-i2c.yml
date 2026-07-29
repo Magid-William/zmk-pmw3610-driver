@@ -17,3 +17,7 @@ properties:
     type: boolean
   invert-y:
     type: boolean
+  speed-scale:
+    type: int
+    default: 255
+    description: Speed scaling factor (1-255, 255 = 100%, 204 = 80%, 128 = 50%)

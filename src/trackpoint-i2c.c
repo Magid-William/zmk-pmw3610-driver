@@ -12,6 +12,7 @@ LOG_MODULE_REGISTER(trackpoint_i2c, CONFIG_TRACKPOINT_I2C_LOG_LEVEL);
 
 #define BURST_SIZE    2
 #define BURST_ADDR    0x12
+#define SPEED_REG     0x11
 
 #define INPUT_EV_REL    0x02
 #define INPUT_REL_X     0x00
@@ -24,6 +25,7 @@ struct trackpoint_i2c_config {
     bool swap_xy;
     bool invert_x;
     bool invert_y;
+    uint8_t speed_scale;
 };
 
 struct trackpoint_i2c_data {
@@ -162,6 +164,13 @@ static int trackpoint_i2c_init(const struct device *dev) {
         LOG_ERR("I2C probe FAILED: %d", tst_ret);
     }
 
+    LOG_INF("setting speed_scale=%u", cfg->speed_scale);
+    uint8_t spd_wbuf[2] = { SPEED_REG, cfg->speed_scale };
+    ret = i2c_write_dt(&cfg->i2c, spd_wbuf, 2);
+    if (ret) {
+        LOG_ERR("speed_scale write failed: %d", ret);
+    }
+
     LOG_INF("scheduling poll work (100ms first shot, 10ms thereafter)");
     k_work_init_delayable(&data->poll_work, trackpoint_i2c_poll);
     k_work_schedule(&data->poll_work, K_MSEC(100));
@@ -179,6 +188,7 @@ static int trackpoint_i2c_init(const struct device *dev) {
         .swap_xy = DT_INST_PROP(n, swap_xy),                                            \
         .invert_x = DT_INST_PROP(n, invert_x),                                          \
         .invert_y = DT_INST_PROP(n, invert_y),                                          \
+        .speed_scale = DT_INST_PROP(n, speed_scale),                                    \
     };                                                                                  \
     DEVICE_DT_INST_DEFINE(n, trackpoint_i2c_init, NULL, &data##n, &config##n,           \
                           POST_KERNEL, CONFIG_INPUT_INIT_PRIORITY, NULL);
