@@ -124,7 +124,8 @@ static void trackpoint_i2c_poll(struct k_work *work) {
 
 static void trackpoint_i2c_gpio_callback(const struct device *gpiob,
                                           struct gpio_callback *cb, uint32_t pins) {
-    (void)gpiob; (void)cb; (void)pins;
+    struct trackpoint_i2c_data *data = CONTAINER_OF(cb, struct trackpoint_i2c_data, irq_gpio_cb);
+    k_work_reschedule(&data->poll_work, K_NO_WAIT);
 }
 
 static int trackpoint_i2c_init(const struct device *dev) {
@@ -156,6 +157,14 @@ static int trackpoint_i2c_init(const struct device *dev) {
     int ret = gpio_pin_configure_dt(&cfg->irq_gpio, GPIO_INPUT);
     if (ret) {
         LOG_ERR("Cannot configure IRQ GPIO: %d", ret);
+        return ret;
+    }
+
+    gpio_init_callback(&data->irq_gpio_cb, trackpoint_i2c_gpio_callback, BIT(cfg->irq_gpio.pin));
+    gpio_add_callback(cfg->irq_gpio.port, &data->irq_gpio_cb);
+    ret = gpio_pin_interrupt_configure_dt(&cfg->irq_gpio, GPIO_INT_EDGE_FALLING);
+    if (ret) {
+        LOG_ERR("Cannot configure IRQ GPIO interrupt: %d", ret);
         return ret;
     }
 
