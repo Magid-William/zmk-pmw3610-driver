@@ -36,6 +36,8 @@ struct trackpoint_i2c_data {
     int64_t dy;
     uint8_t zero_count;
     uint32_t prev_poll_ms;
+    uint8_t consecutive_errors;
+    uint32_t poll_interval_ms;
 };
 
 static void trackpoint_i2c_poll(struct k_work *work) {
@@ -54,7 +56,8 @@ static void trackpoint_i2c_poll(struct k_work *work) {
 
     int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, buf, BURST_SIZE);
     if (ret == 0) {
-        LOG_INF("RX: [0x%02x 0x%02x]", buf[0], buf[1]);
+        data->consecutive_errors = 0;
+        data->poll_interval_ms = 10;
 
         int8_t rawx = (int8_t)buf[0];
         int8_t rawy = (int8_t)buf[1];
@@ -100,10 +103,21 @@ static void trackpoint_i2c_poll(struct k_work *work) {
             LOG_DBG("no motion to report");
         }
     } else {
-        LOG_ERR("I2C read burst failed: %d (addr=0x%02x len=%d)", ret, BURST_ADDR, BURST_SIZE);
+        data->consecutive_errors++;
+        LOG_ERR("I2C read burst failed: %d (addr=0x%02x len=%d consecutive=%u)",
+                ret, BURST_ADDR, BURST_SIZE, data->consecutive_errors);
+        if (data->consecutive_errors >= 50) {
+            data->poll_interval_ms = 5000;
+        } else if (data->consecutive_errors >= 10) {
+            data->poll_interval_ms = 1000;
+        } else if (data->consecutive_errors >= 3) {
+            data->poll_interval_ms = 100;
+        } else {
+            data->poll_interval_ms = 10;
+        }
     }
 
-    k_work_schedule(&data->poll_work, K_MSEC(10));
+    k_work_schedule(&data->poll_work, K_MSEC(data->poll_interval_ms));
 }
 
 static void trackpoint_i2c_gpio_callback(const struct device *gpiob,
@@ -120,6 +134,8 @@ static int trackpoint_i2c_init(const struct device *dev) {
     data->dy = 0;
     data->zero_count = 0;
     data->prev_poll_ms = 0;
+    data->consecutive_errors = 0;
+    data->poll_interval_ms = 10;
 
     LOG_INF("init start");
 
