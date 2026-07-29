@@ -103,7 +103,9 @@ static void trackpoint_i2c_poll(struct k_work *work) {
             LOG_DBG("no motion to report");
         }
     } else {
-        data->consecutive_errors++;
+        if (data->consecutive_errors < 200) {
+            data->consecutive_errors++;
+        }
         LOG_ERR("I2C read burst failed: %d (addr=0x%02x len=%d consecutive=%u)",
                 ret, BURST_ADDR, BURST_SIZE, data->consecutive_errors);
         if (data->consecutive_errors >= 50) {
