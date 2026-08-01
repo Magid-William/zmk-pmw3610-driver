@@ -45,6 +45,17 @@ static void trackpoint_i2c_poll(struct k_work *work) {
     struct trackpoint_i2c_data *data = CONTAINER_OF(dwork, struct trackpoint_i2c_data, poll_work);
     const struct trackpoint_i2c_config *cfg = data->dev->config;
 
+    int mot = gpio_pin_get_dt(&cfg->irq_gpio);
+    if (mot < 0) {
+        LOG_ERR("MOT pin read failed: %d", mot);
+        k_work_schedule(&data->poll_work, K_MSEC(100));
+        return;
+    }
+    if (mot != 0) {
+        LOG_DBG("poll: Pro Mini sleeping (MOT active-low=HIGH), stopping");
+        return;
+    }
+
     uint32_t now_ms = k_uptime_get();
     uint32_t delta_ms = data->prev_poll_ms ? (now_ms - data->prev_poll_ms) : 0;
     data->prev_poll_ms = now_ms;
@@ -125,7 +136,21 @@ static void trackpoint_i2c_poll(struct k_work *work) {
 static void trackpoint_i2c_gpio_callback(const struct device *gpiob,
                                           struct gpio_callback *cb, uint32_t pins) {
     struct trackpoint_i2c_data *data = CONTAINER_OF(cb, struct trackpoint_i2c_data, irq_gpio_cb);
-    k_work_reschedule(&data->poll_work, K_NO_WAIT);
+    const struct trackpoint_i2c_config *cfg = data->dev->config;
+
+    int mot = gpio_pin_get_dt(&cfg->irq_gpio);
+    if (mot < 0) {
+        LOG_ERR("MOT pin read failed: %d", mot);
+        return;
+    }
+
+    if (mot != 0) {
+        LOG_INF("sleep: MOT active (low), cancelling poll work");
+        k_work_cancel_delayable(&data->poll_work);
+    } else {
+        LOG_INF("wake: MOT inactive (high), resuming poll work");
+        k_work_schedule(&data->poll_work, K_MSEC(10));
+    }
 }
 
 static int trackpoint_i2c_init(const struct device *dev) {
@@ -139,6 +164,8 @@ static int trackpoint_i2c_init(const struct device *dev) {
     data->prev_poll_ms = 0;
     data->consecutive_errors = 0;
     data->poll_interval_ms = 10;
+
+    k_work_init_delayable(&data->poll_work, trackpoint_i2c_poll);
 
     LOG_INF("init start");
 
@@ -160,14 +187,6 @@ static int trackpoint_i2c_init(const struct device *dev) {
         return ret;
     }
 
-    gpio_init_callback(&data->irq_gpio_cb, trackpoint_i2c_gpio_callback, BIT(cfg->irq_gpio.pin));
-    gpio_add_callback(cfg->irq_gpio.port, &data->irq_gpio_cb);
-    ret = gpio_pin_interrupt_configure_dt(&cfg->irq_gpio, GPIO_INT_EDGE_FALLING);
-    if (ret) {
-        LOG_ERR("Cannot configure IRQ GPIO interrupt: %d", ret);
-        return ret;
-    }
-
     if (!device_is_ready(cfg->reset_gpio.port)) {
         LOG_ERR("Reset GPIO device not ready");
         return -ENODEV;
@@ -181,26 +200,48 @@ static int trackpoint_i2c_init(const struct device *dev) {
     gpio_pin_configure_dt(&cfg->reset_gpio, GPIO_INPUT | GPIO_PULL_UP);
     k_msleep(500);
 
-    LOG_INF("probing I2C at 0x%02x", BURST_ADDR);
-    uint8_t tst_addr = 0x00;
-    uint8_t tst_val = 0;
-    int tst_ret = i2c_write_read_dt(&cfg->i2c, &tst_addr, 1, &tst_val, 1);
-    if (tst_ret == 0) {
-        LOG_INF("I2C probe OK: reg[0x00]=0x%02x", tst_val);
+    int mot = gpio_pin_get_dt(&cfg->irq_gpio);
+    if (mot < 0) {
+        LOG_ERR("MOT pin read failed at init: %d", mot);
     } else {
-        LOG_ERR("I2C probe FAILED: %d", tst_ret);
+        LOG_INF("MOT level at init: %d (active-low: 1=sleeping, 0=awake)", mot);
     }
 
-    LOG_INF("setting speed_scale=%u", cfg->speed_scale);
-    uint8_t spd_wbuf[2] = { SPEED_REG, cfg->speed_scale };
-    ret = i2c_write_dt(&cfg->i2c, spd_wbuf, 2);
+    if (mot == 0) {
+        LOG_INF("probing I2C at 0x%02x", BURST_ADDR);
+        uint8_t tst_addr = 0x00;
+        uint8_t tst_val = 0;
+        int tst_ret = i2c_write_read_dt(&cfg->i2c, &tst_addr, 1, &tst_val, 1);
+        if (tst_ret == 0) {
+            LOG_INF("I2C probe OK: reg[0x00]=0x%02x", tst_val);
+        } else {
+            LOG_ERR("I2C probe FAILED: %d", tst_ret);
+        }
+
+        LOG_INF("setting speed_scale=%u", cfg->speed_scale);
+        uint8_t spd_wbuf[2] = { SPEED_REG, cfg->speed_scale };
+        ret = i2c_write_dt(&cfg->i2c, spd_wbuf, 2);
+        if (ret) {
+            LOG_ERR("speed_scale write failed: %d", ret);
+        }
+    } else {
+        LOG_INF("Pro Mini sleeping at init — skipping probe/speed, waiting for wake edge");
+    }
+
+    gpio_init_callback(&data->irq_gpio_cb, trackpoint_i2c_gpio_callback, BIT(cfg->irq_gpio.pin));
+    gpio_add_callback(cfg->irq_gpio.port, &data->irq_gpio_cb);
+    ret = gpio_pin_interrupt_configure_dt(&cfg->irq_gpio, GPIO_INT_EDGE_BOTH);
     if (ret) {
-        LOG_ERR("speed_scale write failed: %d", ret);
+        LOG_ERR("Cannot configure IRQ GPIO interrupt: %d", ret);
+        return ret;
     }
 
-    LOG_INF("scheduling poll work (100ms first shot, 10ms thereafter)");
-    k_work_init_delayable(&data->poll_work, trackpoint_i2c_poll);
-    k_work_schedule(&data->poll_work, K_MSEC(100));
+    if (mot == 0) {
+        LOG_INF("scheduling poll work (100ms first shot, 10ms thereafter)");
+        k_work_schedule(&data->poll_work, K_MSEC(100));
+    } else {
+        LOG_INF("poll held — wake edge will resume it");
+    }
 
     LOG_INF("init complete");
     return 0;
