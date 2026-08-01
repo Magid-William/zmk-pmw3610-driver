@@ -52,7 +52,7 @@ static void trackpoint_i2c_poll(struct k_work *work) {
         return;
     }
     if (mot != 0) {
-        LOG_DBG("poll: Pro Mini sleeping (MOT active-low=HIGH), stopping");
+        LOG_DBG("poll: Pro Mini sleeping (MOT logical HIGH / physically LOW), stopping");
         return;
     }
 
