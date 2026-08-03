@@ -67,14 +67,21 @@ static void trackpoint_i2c_poll(struct k_work *work) {
 
     LOG_DBG("poll start interval=%ums", delta_ms);
 
-    int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, buf, BURST_SIZE);
+    /* Exp44: separate write (with STOP) + read (fresh START) transactions.
+     * The nRF TWIM combined transaction (repeated START) does not deliver the
+     * register byte reliably to the ATtiny85 USI slave — every read came back
+     * served from the burst register. */
+    int ret = i2c_write_dt(&cfg->i2c, &addr, 1);
     if (ret == 0) {
-        /* Exp44: replicate the I2C probe's proven read pattern — a second
-         * (debug) register read after each burst read. The USI slave on the
-         * ATtiny85 serves the burst reliably only when read this way. */
+        ret = i2c_read_dt(&cfg->i2c, buf, BURST_SIZE);
+    }
+    if (ret == 0) {
         uint8_t dbg_addr = DEBUG_ADDR;
         uint8_t dbg[DEBUG_SIZE];
-        int dbg_ret = i2c_write_read_dt(&cfg->i2c, &dbg_addr, 1, dbg, DEBUG_SIZE);
+        int dbg_ret = i2c_write_dt(&cfg->i2c, &dbg_addr, 1);
+        if (dbg_ret == 0) {
+            dbg_ret = i2c_read_dt(&cfg->i2c, dbg, DEBUG_SIZE);
+        }
         if (dbg_ret == 0) {
             LOG_INF("dbg: leg=%u step=%u", dbg[0], dbg[1]);
         } else {
@@ -225,7 +232,10 @@ static int trackpoint_i2c_init(const struct device *dev) {
         LOG_INF("probing I2C at 0x%02x", BURST_ADDR);
         uint8_t tst_addr = 0x00;
         uint8_t tst_val = 0;
-        int tst_ret = i2c_write_read_dt(&cfg->i2c, &tst_addr, 1, &tst_val, 1);
+        int tst_ret = i2c_write_dt(&cfg->i2c, &tst_addr, 1);
+        if (tst_ret == 0) {
+            tst_ret = i2c_read_dt(&cfg->i2c, &tst_val, 1);
+        }
         if (tst_ret == 0) {
             LOG_INF("I2C probe OK: reg[0x00]=0x%02x", tst_val);
         } else {
