@@ -76,18 +76,6 @@ static void trackpoint_i2c_poll(struct k_work *work) {
         ret = i2c_read_dt(&cfg->i2c, buf, BURST_SIZE);
     }
     if (ret == 0) {
-        uint8_t dbg_addr = DEBUG_ADDR;
-        uint8_t dbg[DEBUG_SIZE];
-        int dbg_ret = i2c_write_dt(&cfg->i2c, &dbg_addr, 1);
-        if (dbg_ret == 0) {
-            dbg_ret = i2c_read_dt(&cfg->i2c, dbg, DEBUG_SIZE);
-        }
-        if (dbg_ret == 0) {
-            LOG_INF("dbg: leg=%u step=%u", dbg[0], dbg[1]);
-        } else {
-            LOG_ERR("debug read failed: %d", dbg_ret);
-        }
-
         data->consecutive_errors = 0;
         data->poll_interval_ms = 10;
 
