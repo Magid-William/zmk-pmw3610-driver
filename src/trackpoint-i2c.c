@@ -65,7 +65,14 @@ static void trackpoint_i2c_poll(struct k_work *work) {
 
     LOG_DBG("poll start interval=%ums", delta_ms);
 
-    int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, buf, BURST_SIZE);
+    /* ATtiny85 USI slave: the nRF TWIM combined transaction (repeated START)
+     * does not deliver the register byte reliably — cur_addr stays at boot
+     * value 0, so requestEvent serves the fallback (0x00). Use separate
+     * write (with STOP) + read (fresh START) transactions instead. */
+    int ret = i2c_write_dt(&cfg->i2c, &addr, 1);
+    if (ret == 0) {
+        ret = i2c_read_dt(&cfg->i2c, buf, BURST_SIZE);
+    }
     if (ret == 0) {
         data->consecutive_errors = 0;
         data->poll_interval_ms = 10;
@@ -211,7 +218,10 @@ static int trackpoint_i2c_init(const struct device *dev) {
         LOG_INF("probing I2C at 0x%02x", BURST_ADDR);
         uint8_t tst_addr = 0x00;
         uint8_t tst_val = 0;
-        int tst_ret = i2c_write_read_dt(&cfg->i2c, &tst_addr, 1, &tst_val, 1);
+        int tst_ret = i2c_write_dt(&cfg->i2c, &tst_addr, 1);
+        if (tst_ret == 0) {
+            tst_ret = i2c_read_dt(&cfg->i2c, &tst_val, 1);
+        }
         if (tst_ret == 0) {
             LOG_INF("I2C probe OK: reg[0x00]=0x%02x", tst_val);
         } else {
