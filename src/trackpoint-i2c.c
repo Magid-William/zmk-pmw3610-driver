@@ -12,6 +12,8 @@ LOG_MODULE_REGISTER(trackpoint_i2c, CONFIG_TRACKPOINT_I2C_LOG_LEVEL);
 
 #define BURST_SIZE    2
 #define BURST_ADDR    0x12
+#define DEBUG_ADDR    0x03
+#define DEBUG_SIZE    5
 #define SPEED_REG     0x11
 
 #define INPUT_EV_REL    0x02
@@ -67,6 +69,18 @@ static void trackpoint_i2c_poll(struct k_work *work) {
 
     int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, buf, BURST_SIZE);
     if (ret == 0) {
+        /* Exp44: replicate the I2C probe's proven read pattern — a second
+         * (debug) register read after each burst read. The USI slave on the
+         * ATtiny85 serves the burst reliably only when read this way. */
+        uint8_t dbg_addr = DEBUG_ADDR;
+        uint8_t dbg[DEBUG_SIZE];
+        int dbg_ret = i2c_write_read_dt(&cfg->i2c, &dbg_addr, 1, dbg, DEBUG_SIZE);
+        if (dbg_ret == 0) {
+            LOG_INF("dbg: leg=%u step=%u", dbg[0], dbg[1]);
+        } else {
+            LOG_ERR("debug read failed: %d", dbg_ret);
+        }
+
         data->consecutive_errors = 0;
         data->poll_interval_ms = 10;
 
