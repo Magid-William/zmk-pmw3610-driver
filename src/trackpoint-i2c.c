@@ -45,15 +45,17 @@ static void trackpoint_i2c_poll(struct k_work *work) {
     struct trackpoint_i2c_data *data = CONTAINER_OF(dwork, struct trackpoint_i2c_data, poll_work);
     const struct trackpoint_i2c_config *cfg = data->dev->config;
 
-    int mot = gpio_pin_get_dt(&cfg->irq_gpio);
-    if (mot < 0) {
-        LOG_ERR("MOT pin read failed: %d", mot);
-        k_work_schedule(&data->poll_work, K_MSEC(100));
-        return;
-    }
-    if (mot != 0) {
-        LOG_DBG("poll: Pro Mini sleeping (MOT logical HIGH / physically LOW), stopping");
-        return;
+    if (cfg->irq_gpio.port) {
+        int mot = gpio_pin_get_dt(&cfg->irq_gpio);
+        if (mot < 0) {
+            LOG_ERR("MOT pin read failed: %d", mot);
+            k_work_schedule(&data->poll_work, K_MSEC(100));
+            return;
+        }
+        if (mot != 0) {
+            LOG_DBG("poll: Pro Mini sleeping (MOT logical HIGH / physically LOW), stopping");
+            return;
+        }
     }
 
     uint32_t now_ms = k_uptime_get();
@@ -175,36 +177,50 @@ static int trackpoint_i2c_init(const struct device *dev) {
     }
     LOG_DBG("I2C bus ready: %s", cfg->i2c.bus->name);
 
-    if (!device_is_ready(cfg->irq_gpio.port)) {
-        LOG_ERR("IRQ GPIO device not ready");
-        return -ENODEV;
-    }
-    LOG_DBG("IRQ GPIO ready: %s pin=%d", cfg->irq_gpio.port->name, cfg->irq_gpio.pin);
+    if (cfg->irq_gpio.port) {
+        if (!device_is_ready(cfg->irq_gpio.port)) {
+            LOG_ERR("IRQ GPIO device not ready");
+            return -ENODEV;
+        }
+        LOG_DBG("IRQ GPIO ready: %s pin=%d", cfg->irq_gpio.port->name, cfg->irq_gpio.pin);
 
-    int ret = gpio_pin_configure_dt(&cfg->irq_gpio, GPIO_INPUT);
-    if (ret) {
-        LOG_ERR("Cannot configure IRQ GPIO: %d", ret);
-        return ret;
-    }
-
-    if (!device_is_ready(cfg->reset_gpio.port)) {
-        LOG_ERR("Reset GPIO device not ready");
-        return -ENODEV;
-    }
-    LOG_DBG("Reset GPIO ready: %s pin=%d", cfg->reset_gpio.port->name, cfg->reset_gpio.pin);
-
-    LOG_INF("asserting reset pin (100ms LOW)");
-    gpio_pin_configure_dt(&cfg->reset_gpio, GPIO_OUTPUT_ACTIVE);
-    k_msleep(100);
-    LOG_INF("releasing reset pin (input+pull-up, 500ms boot wait)");
-    gpio_pin_configure_dt(&cfg->reset_gpio, GPIO_INPUT | GPIO_PULL_UP);
-    k_msleep(500);
-
-    int mot = gpio_pin_get_dt(&cfg->irq_gpio);
-    if (mot < 0) {
-        LOG_ERR("MOT pin read failed at init: %d", mot);
+        int ret = gpio_pin_configure_dt(&cfg->irq_gpio, GPIO_INPUT);
+        if (ret) {
+            LOG_ERR("Cannot configure IRQ GPIO: %d", ret);
+            return ret;
+        }
     } else {
-        LOG_INF("MOT level at init: %d (active-low: 1=sleeping, 0=awake)", mot);
+        LOG_INF("no irq-gpios in DT — MOT gating disabled, plain polling");
+    }
+
+    if (cfg->reset_gpio.port) {
+        if (!device_is_ready(cfg->reset_gpio.port)) {
+            LOG_ERR("Reset GPIO device not ready");
+            return -ENODEV;
+        }
+        LOG_DBG("Reset GPIO ready: %s pin=%d", cfg->reset_gpio.port->name, cfg->reset_gpio.pin);
+
+        LOG_INF("asserting reset pin (100ms LOW)");
+        gpio_pin_configure_dt(&cfg->reset_gpio, GPIO_OUTPUT_ACTIVE);
+        k_msleep(100);
+        LOG_INF("releasing reset pin (input+pull-up, 500ms boot wait)");
+        gpio_pin_configure_dt(&cfg->reset_gpio, GPIO_INPUT | GPIO_PULL_UP);
+        k_msleep(500);
+    } else {
+        LOG_INF("no reset-gpios in DT — skipping reset pulse");
+    }
+
+    int mot;
+    if (cfg->irq_gpio.port) {
+        mot = gpio_pin_get_dt(&cfg->irq_gpio);
+        if (mot < 0) {
+            LOG_ERR("MOT pin read failed at init: %d", mot);
+        } else {
+            LOG_INF("MOT level at init: %d (active-low: 1=sleeping, 0=awake)", mot);
+        }
+    } else {
+        LOG_INF("no MOT — assuming Pro Mini awake, probing immediately");
+        mot = 0;
     }
 
     if (mot == 0) {
@@ -220,20 +236,22 @@ static int trackpoint_i2c_init(const struct device *dev) {
 
         LOG_INF("setting speed_scale=%u", cfg->speed_scale);
         uint8_t spd_wbuf[2] = { SPEED_REG, cfg->speed_scale };
-        ret = i2c_write_dt(&cfg->i2c, spd_wbuf, 2);
-        if (ret) {
-            LOG_ERR("speed_scale write failed: %d", ret);
+        int spd_ret = i2c_write_dt(&cfg->i2c, spd_wbuf, 2);
+        if (spd_ret) {
+            LOG_ERR("speed_scale write failed: %d", spd_ret);
         }
     } else {
         LOG_INF("Pro Mini sleeping at init — skipping probe/speed, waiting for wake edge");
     }
 
-    gpio_init_callback(&data->irq_gpio_cb, trackpoint_i2c_gpio_callback, BIT(cfg->irq_gpio.pin));
-    gpio_add_callback(cfg->irq_gpio.port, &data->irq_gpio_cb);
-    ret = gpio_pin_interrupt_configure_dt(&cfg->irq_gpio, GPIO_INT_EDGE_BOTH);
-    if (ret) {
-        LOG_ERR("Cannot configure IRQ GPIO interrupt: %d", ret);
-        return ret;
+    if (cfg->irq_gpio.port) {
+        gpio_init_callback(&data->irq_gpio_cb, trackpoint_i2c_gpio_callback, BIT(cfg->irq_gpio.pin));
+        gpio_add_callback(cfg->irq_gpio.port, &data->irq_gpio_cb);
+        int ret = gpio_pin_interrupt_configure_dt(&cfg->irq_gpio, GPIO_INT_EDGE_BOTH);
+        if (ret) {
+            LOG_ERR("Cannot configure IRQ GPIO interrupt: %d", ret);
+            return ret;
+        }
     }
 
     if (mot == 0) {
@@ -251,8 +269,8 @@ static int trackpoint_i2c_init(const struct device *dev) {
     static struct trackpoint_i2c_data data##n;                                          \
     static const struct trackpoint_i2c_config config##n = {                             \
         .i2c = I2C_DT_SPEC_INST_GET(n),                                                 \
-        .irq_gpio = GPIO_DT_SPEC_INST_GET(n, irq_gpios),                                \
-        .reset_gpio = GPIO_DT_SPEC_INST_GET(n, reset_gpios),                            \
+        .irq_gpio = GPIO_DT_SPEC_INST_GET_OR(n, irq_gpios, {0}),                        \
+        .reset_gpio = GPIO_DT_SPEC_INST_GET_OR(n, reset_gpios, {0}),                    \
         .swap_xy = DT_INST_PROP(n, swap_xy),                                            \
         .invert_x = DT_INST_PROP(n, invert_x),                                          \
         .invert_y = DT_INST_PROP(n, invert_y),                                          \
