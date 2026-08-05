@@ -69,6 +69,10 @@ static void trackpoint_i2c_poll(struct k_work *work) {
 
     int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, buf, BURST_SIZE);
     if (ret == 0) {
+        if (data->consecutive_errors > 0) {
+            LOG_INF("I2C link restored: device 0x%02x online again (was %u consecutive errors)",
+                    BURST_ADDR, data->consecutive_errors);
+        }
         data->consecutive_errors = 0;
         data->poll_interval_ms = 10;
 
@@ -116,11 +120,13 @@ static void trackpoint_i2c_poll(struct k_work *work) {
             LOG_DBG("no motion to report");
         }
     } else {
+        if (data->consecutive_errors == 0) {
+            LOG_WRN("I2C link lost: read burst failed %d at 0x%02x (len=%d), backing off",
+                    ret, BURST_ADDR, BURST_SIZE);
+        }
         if (data->consecutive_errors < 200) {
             data->consecutive_errors++;
         }
-        LOG_ERR("I2C read burst failed: %d (addr=0x%02x len=%d consecutive=%u)",
-                ret, BURST_ADDR, BURST_SIZE, data->consecutive_errors);
         if (data->consecutive_errors >= 50) {
             data->poll_interval_ms = 5000;
         } else if (data->consecutive_errors >= 10) {
