@@ -147,21 +147,18 @@ static void trackpoint_i2c_poll(struct k_work *work) {
         }
     } else {
         if (data->consecutive_errors == 0) {
-            LOG_WRN("I2C link lost: read burst failed %d at 0x%02x (len=%d), backing off",
+            LOG_WRN("I2C link lost: read burst failed %d at 0x%02x (len=%d), polling at fixed 10ms",
                     ret, BURST_ADDR, BURST_SIZE);
         }
+        /* Exp62: no error backoff — always re-poll at 10ms. The ATtiny85 relies
+         * on the master retry cadence to recover its USI-TWI slave (NiceNano
+         * deep sleep leaves it armed for edges that never arrive). Old 10ms→
+         * 100ms→1s→5s ramp made a dead link look permanent until a NiceNano
+         * reset. Uniform 10ms re-syncs within a few polls. */
         if (data->consecutive_errors < 200) {
             data->consecutive_errors++;
         }
-        if (data->consecutive_errors >= 50) {
-            data->poll_interval_ms = 5000;
-        } else if (data->consecutive_errors >= 10) {
-            data->poll_interval_ms = 1000;
-        } else if (data->consecutive_errors >= 3) {
-            data->poll_interval_ms = 100;
-        } else {
-            data->poll_interval_ms = 10;
-        }
+        data->poll_interval_ms = 10;
     }
 
     k_work_schedule(&data->poll_work, K_MSEC(data->poll_interval_ms));
