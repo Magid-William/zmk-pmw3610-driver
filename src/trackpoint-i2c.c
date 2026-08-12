@@ -45,7 +45,10 @@ struct trackpoint_i2c_data {
     uint32_t prev_poll_ms;
     uint8_t consecutive_errors;
     uint32_t poll_interval_ms;
+    bool params_written;
 };
+
+static int trackpoint_i2c_write_params(const struct device *dev);
 
 static void trackpoint_i2c_poll(struct k_work *work) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
@@ -76,12 +79,28 @@ static void trackpoint_i2c_poll(struct k_work *work) {
 
     int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, buf, BURST_SIZE);
     if (ret == 0) {
-        if (data->consecutive_errors > 0) {
+        bool was_lost = data->consecutive_errors > 0;
+        if (was_lost) {
             LOG_INF("I2C link restored: device 0x%02x online again (was %u consecutive errors)",
                     BURST_ADDR, data->consecutive_errors);
         }
         data->consecutive_errors = 0;
         data->poll_interval_ms = 10;
+
+        /* The Pro Mini is power-gated (EXT_POWER P0.06/P0.08) and boots after
+         * this driver's init, and is power-cycled on every ZMK deep-sleep wake
+         * (Exp48/49/50). Its PowerCurve params live in RAM and reset to
+         * defaults (sens=255, identity) on every boot — so the params written
+         * once at init are lost. Re-apply them here: on the first successful
+         * read after boot AND on every link-restore (Pro Mini rebooted). */
+        if (!data->params_written || was_lost) {
+            int p_ret = trackpoint_i2c_write_params(data->dev);
+            if (p_ret) {
+                LOG_ERR("curve/speed param re-write failed: %d", p_ret);
+            } else {
+                data->params_written = true;
+            }
+        }
 
         int8_t rawx = (int8_t)buf[0];
         int8_t rawy = (int8_t)buf[1];
@@ -217,6 +236,7 @@ static int trackpoint_i2c_init(const struct device *dev) {
     data->prev_poll_ms = 0;
     data->consecutive_errors = 0;
     data->poll_interval_ms = 10;
+    data->params_written = false;
 
     k_work_init_delayable(&data->poll_work, trackpoint_i2c_poll);
 
