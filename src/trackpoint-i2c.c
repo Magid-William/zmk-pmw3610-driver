@@ -6,6 +6,7 @@
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/input/input.h>
+#include <zephyr/sys/util.h>
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(trackpoint_i2c, CONFIG_TRACKPOINT_I2C_LOG_LEVEL);
@@ -13,6 +14,9 @@ LOG_MODULE_REGISTER(trackpoint_i2c, CONFIG_TRACKPOINT_I2C_LOG_LEVEL);
 #define BURST_SIZE    2
 #define BURST_ADDR    0x12
 #define SPEED_REG     0x11
+#define CURVE_RATE_REG    0x13
+#define CURVE_EXP_REG     0x15
+#define CURVE_START_REG   0x17
 
 #define INPUT_EV_REL    0x02
 #define INPUT_REL_X     0x00
@@ -26,6 +30,9 @@ struct trackpoint_i2c_config {
     bool invert_x;
     bool invert_y;
     uint8_t speed_scale;
+    uint16_t curve_rate;
+    uint16_t curve_exponent;
+    uint16_t curve_start;
 };
 
 struct trackpoint_i2c_data {
@@ -161,6 +168,44 @@ static void trackpoint_i2c_gpio_callback(const struct device *gpiob,
     }
 }
 
+static int trackpoint_i2c_write_params(const struct device *dev) {
+    const struct trackpoint_i2c_config *cfg = dev->config;
+
+    /* speed_scale (1 byte) */
+    uint8_t spd_wbuf[2] = { SPEED_REG, cfg->speed_scale };
+    int ret = i2c_write_dt(&cfg->i2c, spd_wbuf, 2);
+    if (ret) {
+        LOG_ERR("speed_scale write failed: %d", ret);
+        return ret;
+    }
+    LOG_INF("speed_scale written: %u", cfg->speed_scale);
+
+    /* PowerCurve params (2-byte little-endian Q8.8) */
+    const struct {
+        uint8_t reg;
+        uint16_t val;
+        const char *name;
+    } params[] = {
+        { CURVE_RATE_REG,  cfg->curve_rate,     "curve_rate"     },
+        { CURVE_EXP_REG,   cfg->curve_exponent, "curve_exponent" },
+        { CURVE_START_REG, cfg->curve_start,    "curve_start"    },
+    };
+
+    for (size_t i = 0; i < ARRAY_SIZE(params); i++) {
+        uint8_t wbuf[3] = { params[i].reg,
+                            (uint8_t)(params[i].val & 0xFF),
+                            (uint8_t)(params[i].val >> 8) };
+        ret = i2c_write_dt(&cfg->i2c, wbuf, 3);
+        if (ret) {
+            LOG_ERR("%s write failed: %d", params[i].name, ret);
+            return ret;
+        }
+        LOG_INF("%s written: %u", params[i].name, params[i].val);
+    }
+
+    return 0;
+}
+
 static int trackpoint_i2c_init(const struct device *dev) {
     struct trackpoint_i2c_data *data = dev->data;
     const struct trackpoint_i2c_config *cfg = dev->config;
@@ -240,11 +285,9 @@ static int trackpoint_i2c_init(const struct device *dev) {
             LOG_ERR("I2C probe FAILED: %d", tst_ret);
         }
 
-        LOG_INF("setting speed_scale=%u", cfg->speed_scale);
-        uint8_t spd_wbuf[2] = { SPEED_REG, cfg->speed_scale };
-        int spd_ret = i2c_write_dt(&cfg->i2c, spd_wbuf, 2);
+        int spd_ret = trackpoint_i2c_write_params(dev);
         if (spd_ret) {
-            LOG_ERR("speed_scale write failed: %d", spd_ret);
+            LOG_ERR("curve/speed param write failed: %d", spd_ret);
         }
     } else {
         LOG_INF("Pro Mini sleeping at init — skipping probe/speed, waiting for wake edge");
@@ -281,6 +324,9 @@ static int trackpoint_i2c_init(const struct device *dev) {
         .invert_x = DT_INST_PROP(n, invert_x),                                          \
         .invert_y = DT_INST_PROP(n, invert_y),                                          \
         .speed_scale = DT_INST_PROP(n, speed_scale),                                    \
+        .curve_rate = DT_INST_PROP(n, curve_rate),                                      \
+        .curve_exponent = DT_INST_PROP(n, curve_exponent),                              \
+        .curve_start = DT_INST_PROP(n, curve_start),                                    \
     };                                                                                  \
     DEVICE_DT_INST_DEFINE(n, trackpoint_i2c_init, NULL, &data##n, &config##n,           \
                           POST_KERNEL, CONFIG_INPUT_INIT_PRIORITY, NULL);
