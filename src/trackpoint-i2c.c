@@ -38,33 +38,39 @@ struct trackpoint_i2c_config {
 struct trackpoint_i2c_data {
     const struct device *dev;
     struct gpio_callback irq_gpio_cb;
-    struct k_work_delayable poll_work;
+    struct k_work_delayable read_work;
+    struct k_work_delayable heartbeat_work;
     int64_t dx;
     int64_t dy;
     uint8_t zero_count;
     uint32_t prev_poll_ms;
     uint8_t consecutive_errors;
-    uint32_t poll_interval_ms;
     bool params_written;
+    bool force_read;
 };
 
 static int trackpoint_i2c_write_params(const struct device *dev);
 
-static void trackpoint_i2c_poll(struct k_work *work) {
+static void trackpoint_i2c_read(struct k_work *work) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
-    struct trackpoint_i2c_data *data = CONTAINER_OF(dwork, struct trackpoint_i2c_data, poll_work);
+    struct trackpoint_i2c_data *data = CONTAINER_OF(dwork, struct trackpoint_i2c_data, read_work);
     const struct trackpoint_i2c_config *cfg = data->dev->config;
 
-    if (cfg->irq_gpio.port) {
+    bool mot_driven = cfg->irq_gpio.port != NULL;
+    bool force = data->force_read;
+    data->force_read = false;
+
+    /* Exp64: MOT is now an active-low data-ready level (logical 1 = motion
+     * pending). Skip the read while idle unless the heartbeat forced it. */
+    if (mot_driven && !force) {
         int mot = gpio_pin_get_dt(&cfg->irq_gpio);
         if (mot < 0) {
             LOG_ERR("MOT pin read failed: %d", mot);
-            k_work_schedule(&data->poll_work, K_MSEC(100));
+            k_work_schedule(&data->read_work, K_MSEC(100));
             return;
         }
-        if (mot != 0) {
-            LOG_DBG("poll: Pro Mini sleeping (MOT logical HIGH / physically LOW), stopping");
-            return;
+        if (mot == 0) {
+            return; /* idle — wait for the MOT falling edge */
         }
     }
 
@@ -75,7 +81,7 @@ static void trackpoint_i2c_poll(struct k_work *work) {
     uint8_t addr = BURST_ADDR;
     uint8_t buf[BURST_SIZE];
 
-    LOG_DBG("poll start interval=%ums", delta_ms);
+    LOG_DBG("read start interval=%ums", delta_ms);
 
     int ret = i2c_write_read_dt(&cfg->i2c, &addr, 1, buf, BURST_SIZE);
     if (ret == 0) {
@@ -85,14 +91,10 @@ static void trackpoint_i2c_poll(struct k_work *work) {
                     BURST_ADDR, data->consecutive_errors);
         }
         data->consecutive_errors = 0;
-        data->poll_interval_ms = 10;
 
-        /* The Pro Mini is power-gated (EXT_POWER P0.06/P0.08) and boots after
-         * this driver's init, and is power-cycled on every ZMK deep-sleep wake
-         * (Exp48/49/50). Its PowerCurve params live in RAM and reset to
-         * defaults (sens=255, identity) on every boot — so the params written
-         * once at init are lost. Re-apply them here: on the first successful
-         * read after boot AND on every link-restore (Pro Mini rebooted). */
+        /* Re-apply curve/speed params after boot and every link-restore. The
+         * power-gated Pro Mini (and a rebooted ATtiny85) starts with default
+         * identity params in RAM, so a one-time init write is not enough. */
         if (!data->params_written || was_lost) {
             int p_ret = trackpoint_i2c_write_params(data->dev);
             if (p_ret) {
@@ -105,7 +107,7 @@ static void trackpoint_i2c_poll(struct k_work *work) {
         int8_t rawx = (int8_t)buf[0];
         int8_t rawy = (int8_t)buf[1];
 
-        LOG_INF("raw sign-extended: x=%d y=%d", (int)rawx, (int)rawy);
+        LOG_DBG("raw sign-extended: x=%d y=%d", (int)rawx, (int)rawy);
 
         if (cfg->swap_xy) {
             int8_t t = rawx; rawx = rawy; rawy = t;
@@ -119,7 +121,6 @@ static void trackpoint_i2c_poll(struct k_work *work) {
             data->zero_count++;
             LOG_DBG("zero read ++zero_count=%u", data->zero_count);
             if (data->zero_count >= 3) {
-                LOG_DBG("stale timeout: clearing dx/dy (was dx=%d dy=%d)", (int)data->dx, (int)data->dy);
                 data->dx = 0;
                 data->dy = 0;
             }
@@ -132,36 +133,48 @@ static void trackpoint_i2c_poll(struct k_work *work) {
         LOG_DBG("accumulator: dx=%d dy=%d zero_count=%u", (int)data->dx, (int)data->dy, data->zero_count);
 
         if (data->dx != 0 || data->dy != 0) {
-            LOG_INF("SEND: dev=%s ev=REL type=REL_%s val=%d",
-                    data->dev->name,
-                    "X", (int)data->dx);
             input_report(data->dev, INPUT_EV_REL, INPUT_REL_X, data->dx, false, K_NO_WAIT);
-            LOG_INF("SEND: dev=%s ev=REL type=REL_%s val=%d sync",
-                    data->dev->name,
-                    "Y", (int)data->dy);
             input_report(data->dev, INPUT_EV_REL, INPUT_REL_Y, data->dy, true, K_NO_WAIT);
             data->dx = 0;
             data->dy = 0;
         } else {
             LOG_DBG("no motion to report");
         }
+
+        if (mot_driven) {
+            int mot = gpio_pin_get_dt(&cfg->irq_gpio);
+            if (mot != 0) {
+                /* more motion pending — drain immediately */
+                k_work_schedule(&data->read_work, K_MSEC(1));
+            }
+            /* else: drained, wait for the next MOT edge */
+        } else {
+            k_work_schedule(&data->read_work, K_MSEC(10));
+        }
     } else {
         if (data->consecutive_errors == 0) {
-            LOG_WRN("I2C link lost: read burst failed %d at 0x%02x (len=%d), polling at fixed 10ms",
+            LOG_WRN("I2C link lost: read burst failed %d at 0x%02x (len=%d)",
                     ret, BURST_ADDR, BURST_SIZE);
         }
-        /* Exp62: no error backoff — always re-poll at 10ms. The ATtiny85 relies
-         * on the master retry cadence to recover its USI-TWI slave (NiceNano
-         * deep sleep leaves it armed for edges that never arrive). Old 10ms→
-         * 100ms→1s→5s ramp made a dead link look permanent until a NiceNano
-         * reset. Uniform 10ms re-syncs within a few polls. */
+        /* Exp62: no error backoff — retry at 10ms so the ATtiny85's USI-TWI
+         * slave recovers from a wedged state as soon as possible. */
         if (data->consecutive_errors < 200) {
             data->consecutive_errors++;
         }
-        data->poll_interval_ms = 10;
+        k_work_schedule(&data->read_work, K_MSEC(10));
     }
+}
 
-    k_work_schedule(&data->poll_work, K_MSEC(data->poll_interval_ms));
+static void trackpoint_i2c_heartbeat(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct trackpoint_i2c_data *data = CONTAINER_OF(dwork, struct trackpoint_i2c_data, heartbeat_work);
+
+    /* Exp64: slow unconditional read keeps the link re-synced (Exp62 recovery),
+     * re-applies params after a link restore, and covers the case where MOT is
+     * already LOW across a deep-sleep wake (no fresh falling edge). */
+    data->force_read = true;
+    k_work_schedule(&data->read_work, K_NO_WAIT);
+    k_work_schedule(&data->heartbeat_work, K_MSEC(1000));
 }
 
 static void trackpoint_i2c_gpio_callback(const struct device *gpiob,
@@ -176,11 +189,11 @@ static void trackpoint_i2c_gpio_callback(const struct device *gpiob,
     }
 
     if (mot != 0) {
-        LOG_INF("sleep: MOT active (low), cancelling poll work");
-        k_work_cancel_delayable(&data->poll_work);
+        LOG_DBG("MOT data ready, reading now");
+        k_work_schedule(&data->read_work, K_NO_WAIT);
     } else {
-        LOG_INF("wake: MOT inactive (high), resuming poll work");
-        k_work_schedule(&data->poll_work, K_MSEC(10));
+        LOG_DBG("MOT drained, stopping reads");
+        k_work_cancel_delayable(&data->read_work);
     }
 }
 
@@ -232,10 +245,11 @@ static int trackpoint_i2c_init(const struct device *dev) {
     data->zero_count = 0;
     data->prev_poll_ms = 0;
     data->consecutive_errors = 0;
-    data->poll_interval_ms = 10;
     data->params_written = false;
+    data->force_read = false;
 
-    k_work_init_delayable(&data->poll_work, trackpoint_i2c_poll);
+    k_work_init_delayable(&data->read_work, trackpoint_i2c_read);
+    k_work_init_delayable(&data->heartbeat_work, trackpoint_i2c_heartbeat);
 
     LOG_INF("init start");
 
@@ -252,13 +266,13 @@ static int trackpoint_i2c_init(const struct device *dev) {
         }
         LOG_DBG("IRQ GPIO ready: %s pin=%d", cfg->irq_gpio.port->name, cfg->irq_gpio.pin);
 
-        int ret = gpio_pin_configure_dt(&cfg->irq_gpio, GPIO_INPUT);
+        int ret = gpio_pin_configure_dt(&cfg->irq_gpio, GPIO_INPUT | cfg->irq_gpio.dt_flags);
         if (ret) {
             LOG_ERR("Cannot configure IRQ GPIO: %d", ret);
             return ret;
         }
     } else {
-        LOG_INF("no irq-gpios in DT — MOT gating disabled, plain polling");
+        LOG_INF("no irq-gpios in DT — MOT disabled, plain polling");
     }
 
     if (cfg->reset_gpio.port) {
@@ -278,36 +292,22 @@ static int trackpoint_i2c_init(const struct device *dev) {
         LOG_INF("no reset-gpios in DT — skipping reset pulse");
     }
 
-    int mot;
-    if (cfg->irq_gpio.port) {
-        mot = gpio_pin_get_dt(&cfg->irq_gpio);
-        if (mot < 0) {
-            LOG_ERR("MOT pin read failed at init: %d", mot);
-        } else {
-            LOG_INF("MOT level at init: %d (active-low: 1=sleeping, 0=awake)", mot);
-        }
+    /* Exp64: probe + params unconditionally. The slave is always powered
+     * (4-wire) and MOT HIGH at boot just means "idle", not "sleeping". */
+    LOG_INF("probing I2C at 0x%02x", BURST_ADDR);
+    uint8_t tst_addr = 0x00;
+    uint8_t tst_val = 0;
+    int tst_ret = i2c_write_read_dt(&cfg->i2c, &tst_addr, 1, &tst_val, 1);
+    if (tst_ret == 0) {
+        LOG_INF("I2C probe OK: reg[0x00]=0x%02x", tst_val);
     } else {
-        LOG_INF("no MOT — assuming Pro Mini awake, probing immediately");
-        mot = 0;
+        LOG_ERR("I2C probe FAILED: %d", tst_ret);
     }
 
-    if (mot == 0) {
-        LOG_INF("probing I2C at 0x%02x", BURST_ADDR);
-        uint8_t tst_addr = 0x00;
-        uint8_t tst_val = 0;
-        int tst_ret = i2c_write_read_dt(&cfg->i2c, &tst_addr, 1, &tst_val, 1);
-        if (tst_ret == 0) {
-            LOG_INF("I2C probe OK: reg[0x00]=0x%02x", tst_val);
-        } else {
-            LOG_ERR("I2C probe FAILED: %d", tst_ret);
-        }
-
-        int spd_ret = trackpoint_i2c_write_params(dev);
-        if (spd_ret) {
-            LOG_ERR("curve/speed param write failed: %d", spd_ret);
-        }
+    if (trackpoint_i2c_write_params(dev) == 0) {
+        data->params_written = true;
     } else {
-        LOG_INF("Pro Mini sleeping at init — skipping probe/speed, waiting for wake edge");
+        LOG_ERR("curve/speed param write failed at init");
     }
 
     if (cfg->irq_gpio.port) {
@@ -320,12 +320,8 @@ static int trackpoint_i2c_init(const struct device *dev) {
         }
     }
 
-    if (mot == 0) {
-        LOG_INF("scheduling poll work (100ms first shot, 10ms thereafter)");
-        k_work_schedule(&data->poll_work, K_MSEC(100));
-    } else {
-        LOG_INF("poll held — wake edge will resume it");
-    }
+    k_work_schedule(&data->read_work, K_MSEC(100));
+    k_work_schedule(&data->heartbeat_work, K_MSEC(1000));
 
     LOG_INF("init complete");
     return 0;
