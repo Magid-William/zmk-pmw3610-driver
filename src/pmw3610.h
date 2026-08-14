@@ -11,7 +11,7 @@ extern "C" {
 #define T_CLOCK_ON_DELAY_US 300
 
 /* Sensor registers (addresses) */
-#define PMW3610_REG_PRODUCT_ID 0x00
+#define PMW3610_REG_PRODUCT_ID 0x3F
 #define PMW3610_REG_REVISION_ID 0x01
 #define PMW3610_REG_MOTION 0x02
 #define PMW3610_REG_DELTA_X_L 0x03

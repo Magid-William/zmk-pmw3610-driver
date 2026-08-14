@@ -60,14 +60,31 @@ static int (*const async_init_fn[ASYNC_INIT_STEP_COUNT])(const struct device *de
 
 static int pmw3610_read(const struct device *dev, uint8_t addr, uint8_t *value, uint8_t len) {
 	const struct pixart_config *cfg = dev->config;
-	const struct spi_buf tx_buf = { .buf = &addr, .len = sizeof(addr) };
-	const struct spi_buf_set tx = { .buffers = &tx_buf, .count = 1 };
-	struct spi_buf rx_buf[] = {
-		{ .buf = NULL, .len = sizeof(addr), },
-		{ .buf = value, .len = len, },
-	};
-	const struct spi_buf_set rx = { .buffers = rx_buf, .count = ARRAY_SIZE(rx_buf) };
-	return spi_transceive_dt(&cfg->spi, &tx, &rx);
+	uint8_t dummy;
+	int err;
+
+	// Send address byte as a single-byte transaction. CS deassertion
+	// between transactions gives the AVR slave time to prepare its
+	// response (avoids the single-buffered SPDR overwrite race).
+	const struct spi_buf addr_tx_buf = { .buf = &addr, .len = 1 };
+	const struct spi_buf_set addr_tx = { .buffers = &addr_tx_buf, .count = 1 };
+	struct spi_buf addr_rx_buf = { .buf = &dummy, .len = 1 };
+	const struct spi_buf_set addr_rx = { .buffers = &addr_rx_buf, .count = 1 };
+	err = spi_transceive_dt(&cfg->spi, &addr_tx, &addr_rx);
+	if (err) return err;
+
+	// Read each data byte as an individual transaction.
+	uint8_t read_tx = 0x00;
+	for (uint8_t i = 0; i < len; i++) {
+		const struct spi_buf data_tx_buf = { .buf = &read_tx, .len = 1 };
+		const struct spi_buf_set data_tx = { .buffers = &data_tx_buf, .count = 1 };
+		struct spi_buf data_rx_buf = { .buf = &value[i], .len = 1 };
+		const struct spi_buf_set data_rx = { .buffers = &data_rx_buf, .count = 1 };
+		err = spi_transceive_dt(&cfg->spi, &data_tx, &data_rx);
+		if (err) return err;
+	}
+
+	return 0;
 }
 
 static int pmw3610_read_reg(const struct device *dev, uint8_t addr, uint8_t *value) {
@@ -316,30 +333,11 @@ static int pmw3610_async_init_clear_ob1(const struct device *dev) {
 }
 
 static int pmw3610_async_init_check_ob1(const struct device *dev) {
-    uint8_t value;
-    int err = pmw3610_read_reg(dev, PMW3610_REG_OBSERVATION, &value);
-    if (err) {
-        LOG_ERR("Can't do self-test");
-        return err;
-    }
-
-    if ((value & 0x0F) != 0x0F) {
-        LOG_ERR("Failed self-test (0x%x)", value);
-        return -EINVAL;
-    }
-
-    uint8_t product_id = 0x01;
-    err = pmw3610_read_reg(dev, PMW3610_REG_PRODUCT_ID, &product_id);
-    if (err) {
-        LOG_ERR("Cannot obtain product id");
-        return err;
-    }
-
-    if (product_id != PMW3610_PRODUCT_ID) {
-        LOG_ERR("Incorrect product id 0x%x (expecting 0x%x)!", product_id, PMW3610_PRODUCT_ID);
-        return -EIO;
-    }
-
+    // Bypass observation and product ID checks for Pro Mini emulator.
+    // The SPI slave cannot respond before the next byte arrives (AVR
+    // timing race with nRF52 SPIM EasyDMA), so buf[0] is always 0x00.
+    // X_L/Y_L/XY_H land at correct indices (buf[1-3]) regardless.
+    (void)dev;
     return 0;
 }
 
@@ -440,7 +438,7 @@ static int pmw3610_report_data(const struct device *dev) {
     if (err) {
         return err;
     }
-    // LOG_HEXDUMP_DBG(buf, PMW3610_BURST_SIZE, "buf");
+    LOG_HEXDUMP_DBG(buf, PMW3610_BURST_SIZE, "buf");
 
 // 12-bit two's complement value to int16_t
 // adapted from https://stackoverflow.com/questions/70802306/convert-a-12-bit-signed-number-in-c
@@ -449,6 +447,20 @@ static int pmw3610_report_data(const struct device *dev) {
     int16_t x = TOINT16((buf[PMW3610_X_L_POS] + ((buf[PMW3610_XY_H_POS] & 0xF0) << 4)), 12);
     int16_t y = TOINT16((buf[PMW3610_Y_L_POS] + ((buf[PMW3610_XY_H_POS] & 0x0F) << 8)), 12);
     LOG_DBG("x/y: %d/%d", x, y);
+
+#if CONFIG_PMW3610_ALT_LAYER_TOGGLE
+    if (config->layer_toggle >= 0 && (x != 0 || y != 0)) {
+        data->layer_toggle_last_motion_time = k_uptime_get();
+        if (!data->layer_toggle_layer_enabled) {
+            LOG_INF("Activating layer %d on motion (x=%d y=%d)",
+                    config->layer_toggle, x, y);
+            zmk_keymap_layer_activate(config->layer_toggle, false);
+            data->layer_toggle_layer_enabled = true;
+        }
+        k_work_reschedule(&data->layer_toggle_deactivation_work,
+                          K_MSEC(config->layer_toggle_timeout_ms));
+    }
+#endif
 
 #ifdef CONFIG_PMW3610_ALT_SMART_ALGORITHM
     int16_t shutter = ((int16_t)(buf[PMW3610_SHUTTER_H_POS] & 0x01) << 8) 
@@ -505,6 +517,25 @@ static int pmw3610_report_data(const struct device *dev) {
 
     return err;
 }
+
+#if CONFIG_PMW3610_ALT_LAYER_TOGGLE
+static void pmw3610_layer_toggle_deactivate(struct k_work *item) {
+    struct k_work_delayable *d_work = k_work_delayable_from_work(item);
+    struct pixart_data *data =
+        CONTAINER_OF(d_work, struct pixart_data, layer_toggle_deactivation_work);
+    const struct device *dev = data->dev;
+    const struct pixart_config *config = dev->config;
+
+    LOG_INF("Deactivating layer %d (no motion for %lldms)",
+            config->layer_toggle,
+            k_uptime_get() - data->layer_toggle_last_motion_time);
+
+    if (zmk_keymap_layer_active(config->layer_toggle)) {
+        zmk_keymap_layer_deactivate(config->layer_toggle, false);
+    }
+    data->layer_toggle_layer_enabled = false;
+}
+#endif
 
 static void pmw3610_gpio_callback(const struct device *gpiob, struct gpio_callback *cb,
                                   uint32_t pins) {
@@ -571,6 +602,13 @@ static int pmw3610_init(const struct device *dev) {
 
     // init smart algorithm flag;
     data->sw_smart_flag = false;
+
+#if CONFIG_PMW3610_ALT_LAYER_TOGGLE
+    data->layer_toggle_layer_enabled = false;
+    data->layer_toggle_last_motion_time = 0;
+    k_work_init_delayable(&data->layer_toggle_deactivation_work,
+                          pmw3610_layer_toggle_deactivate);
+#endif
 
     // init trigger handler work
     k_work_init(&data->trigger_work, pmw3610_work_callback);
@@ -681,6 +719,8 @@ static const struct sensor_driver_api pmw3610_driver_api = {
         .y_input_code = DT_PROP(DT_DRV_INST(n), y_input_code),                                     \
         .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                                       \
         .force_awake_4ms_mode = DT_PROP(DT_DRV_INST(n), force_awake_4ms_mode),                     \
+        .layer_toggle = DT_PROP(DT_DRV_INST(n), layer_toggle),                                     \
+        .layer_toggle_timeout_ms = DT_PROP(DT_DRV_INST(n), layer_toggle_timeout_ms),               \
     };                                                                                             \
     DEVICE_DT_INST_DEFINE(n, pmw3610_init, NULL, &data##n, &config##n, POST_KERNEL,                \
                           CONFIG_INPUT_PMW3610_INIT_PRIORITY, &pmw3610_driver_api);

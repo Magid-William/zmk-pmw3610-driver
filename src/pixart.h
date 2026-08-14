@@ -26,6 +26,12 @@ struct pixart_data {
 #endif
     bool                         sw_smart_flag; // for pmw3610 smart algorithm
 
+#if CONFIG_PMW3610_ALT_LAYER_TOGGLE
+    bool                         layer_toggle_layer_enabled;
+    int64_t                      layer_toggle_last_motion_time;
+    struct k_work_delayable      layer_toggle_deactivation_work;
+#endif
+
     struct gpio_callback         irq_gpio_cb; // motion pin irq callback
     struct k_work                trigger_work; // realtrigger job
 
@@ -49,6 +55,8 @@ struct pixart_config {
     uint8_t y_input_code;
     bool force_awake;
     bool force_awake_4ms_mode;
+    int8_t layer_toggle;
+    int32_t layer_toggle_timeout_ms;
 };
 
 #ifdef __cplusplus
